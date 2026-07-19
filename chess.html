@@ -393,12 +393,157 @@ async function startNextRound(){
   const pairings=generatePairing(t);
   await saveT({rounds:[...(t.rounds||[]), {number:(t.rounds||[]).length+1, pairings}]});
 }
+/* ── 선수 필드 동의어 매핑 (컬럼명이 달라도 자동 인식) ── */
+const FIELD_SYNONYMS={
+  name:['이름','성명','선수','선수이름','선수명','참가자','참가자이름','참가선수','참가선수이름','name','playername'],
+  group:['부문','부분','그룹','조','부','참가부문','학년','종별','division','group','category'],
+  rating:['레이팅','래이팅','등급','점수','레이팅점수','rating','elo'],
+  club:['소속','학교','소속학교','클럽','팀','소속팀','기관','club','team','school'],
+  phone:['연락처','전화','전화번호','휴대폰','핸드폰','선수연락처','선수전화번호','참가선수연락처','보호자연락처','학부모연락처','phone','tel','mobile','contact'],
+};
+const normKey=s=>String(s||'').replace(/[\s_\-().]/g,'').toLowerCase();
+function matchField(header){
+  const h=normKey(header);
+  if(!h)return null;
+  for(const [field,syns] of Object.entries(FIELD_SYNONYMS)){
+    if(syns.some(s=>h===normKey(s))) return field;
+  }
+  for(const [field,syns] of Object.entries(FIELD_SYNONYMS)){
+    if(syns.some(s=>h.includes(normKey(s)))) return field;
+  }
+  return null;
+}
+/* 2차원 배열(첫 줄 헤더) → 선수 객체 배열 */
+function rowsToPlayers(rows){
+  if(!rows||!rows.length) return {players:[], detected:{}, err:'내용이 비어 있습니다.'};
+  const header=rows[0].map(c=>String(c==null?'':c).trim());
+  const map={}; const detected={};
+  header.forEach((h,i)=>{ const f=matchField(h); if(f&&map[f]===undefined){ map[f]=i; detected[f]=h; } });
+  let body=rows.slice(1);
+  /* 헤더가 없는 경우: 첫 열을 이름으로 간주 */
+  if(map.name===undefined){
+    map.name=0; detected.name='(첫 번째 열을 이름으로 인식)';
+    body=rows;
+  }
+  const players=[];
+  body.forEach(r=>{
+    if(!r)return;
+    const g=i=>(i===undefined||r[i]==null)?'':String(r[i]).trim();
+    const nm=g(map.name);
+    if(!nm)return;                                   // 이름 없으면 건너뜀
+    const ratingRaw=g(map.rating).replace(/[^0-9]/g,'');
+    players.push({
+      id:Math.random().toString(36).slice(2,10),
+      name:nm,
+      group:g(map.group)||'',                        // 비어도 됨
+      rating:ratingRaw?parseInt(ratingRaw):0,        // 비어도 됨 → 0
+      club:g(map.club)||'',                          // 비어도 됨
+      phone:g(map.phone)||'',                        // 비어도 됨
+      active:true,
+    });
+  });
+  return {players, detected, err:players.length?'':'이름을 찾을 수 없습니다. 첫 줄에 "이름" 컬럼이 있는지 확인하세요.'};
+}
+
 async function addPlayer(){
   const n=$('p-name').value.trim(); if(!n)return;
-  const r=parseInt($('p-rating').value)||0;
-  await saveT({players:[...(S.t.players||[]), {id:Math.random().toString(36).slice(2,10), name:n, rating:r, active:true}]});
-  $('p-name').value=''; $('p-rating').value=''; $('p-name').focus();
+  const rRaw=$('p-rating').value.trim();
+  const p={
+    id:Math.random().toString(36).slice(2,10),
+    name:n,
+    group:($('p-group')?$('p-group').value.trim():'')||'',
+    rating:rRaw?(parseInt(rRaw)||0):0,
+    club:($('p-club')?$('p-club').value.trim():'')||'',
+    phone:($('p-phone')?$('p-phone').value.trim():'')||'',
+    active:true,
+  };
+  await saveT({players:[...(S.t.players||[]), p]});
+  ['p-name','p-group','p-rating','p-club','p-phone'].forEach(id=>{ if($(id))$(id).value=''; });
+  $('p-name').focus();
 }
+/* ══════════════ 명단 일괄 가져오기 ══════════════ */
+let IMPORT_BUF=null;   // 미리보기 중인 선수 배열
+
+function showImportResult(res){
+  IMPORT_BUF=res.players;
+  const box=$('imp-result'); if(!box)return;
+  if(res.err && !res.players.length){
+    box.innerHTML=`<div style="color:var(--red);font-size:13px;padding:8px 0">${esc(res.err)}</div>`;
+    return;
+  }
+  const cols=Object.entries(res.detected).map(([f,h])=>{
+    const label={name:'이름',group:'부문',rating:'레이팅',club:'소속',phone:'연락처'}[f];
+    return `<span class="pen-tag w" style="margin-right:4px">${label} ← ${esc(h)}</span>`;
+  }).join('');
+  const missing=['group','rating','club','phone'].filter(f=>!res.detected[f])
+    .map(f=>({group:'부문',rating:'레이팅',club:'소속',phone:'연락처'}[f]));
+  const preview=res.players.slice(0,5).map((p,i)=>
+    `<tr><td>${i+1}</td><td style="font-weight:700">${esc(p.name)}</td><td class="muted">${esc(p.group)||'-'}</td>
+     <td class="muted">${p.rating||'-'}</td><td class="muted">${esc(p.club)||'-'}</td><td class="muted">${esc(p.phone)||'-'}</td></tr>`).join('');
+  box.innerHTML=`
+    <div style="margin-top:12px;padding:12px;border:1px solid var(--green);border-radius:8px;background:var(--green-soft)">
+      <div style="font-weight:700;margin-bottom:6px">✅ ${res.players.length}명을 읽었습니다</div>
+      <div style="margin-bottom:6px">${cols}</div>
+      ${missing.length?`<div class="muted" style="font-size:12px;margin-bottom:8px">인식 안 됨(비워둬도 됩니다): ${missing.join(', ')}</div>`:''}
+      <div class="overflow"><table style="font-size:13px">
+        <tr><th>#</th><th>이름</th><th>부문</th><th>레이팅</th><th>소속</th><th>연락처</th></tr>
+        ${preview}
+        ${res.players.length>5?`<tr><td colspan="6" class="muted">… 외 ${res.players.length-5}명</td></tr>`:''}
+      </table></div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn-p" onclick="confirmImport(false)">＋ 기존 명단에 추가</button>
+        <button class="btn-gold" onclick="confirmImport(true)">↻ 기존 명단 교체</button>
+        <button class="btn-g" onclick="cancelImport()">취소</button>
+      </div>
+    </div>`;
+}
+function cancelImport(){ IMPORT_BUF=null; const b=$('imp-result'); if(b)b.innerHTML=''; const f=$('imp-file'); if(f)f.value=''; const t=$('imp-paste'); if(t)t.value=''; }
+async function confirmImport(replace){
+  if(!IMPORT_BUF||!IMPORT_BUF.length)return;
+  const cur=S.t.players||[];
+  if(replace && cur.length && !confirm(`기존 ${cur.length}명을 지우고 ${IMPORT_BUF.length}명으로 교체할까요?`))return;
+  const next=replace?IMPORT_BUF:[...cur,...IMPORT_BUF];
+  await saveT({players:next});
+  cancelImport();
+}
+/* 엑셀(.xlsx/.xls) 또는 CSV 파일 */
+function importFile(input){
+  const file=input.files&&input.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false,defval:''});
+      showImportResult(rowsToPlayers(rows));
+    }catch(err){
+      const b=$('imp-result'); if(b)b.innerHTML=`<div style="color:var(--red);font-size:13px;padding:8px 0">파일을 읽을 수 없습니다: ${esc(err.message)}</div>`;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+/* 엑셀에서 복사 → 붙여넣기 (탭/쉼표 구분 모두 지원) */
+function importPaste(){
+  const txt=$('imp-paste').value;
+  if(!txt.trim()){ const b=$('imp-result'); if(b)b.innerHTML='<div class="muted" style="font-size:13px;padding:8px 0">붙여넣은 내용이 없습니다.</div>'; return; }
+  const lines=txt.split(/\r?\n/).filter(l=>l.trim());
+  const sep=lines[0].includes('\t')?'\t':(lines[0].includes(',')?',':/\s{2,}/);
+  const rows=lines.map(l=>l.split(sep).map(c=>c.replace(/^["']|["']$/g,'').trim()));
+  showImportResult(rowsToPlayers(rows));
+}
+/* 양식 파일 내려받기 */
+function downloadTemplate(){
+  const rows=[['이름','부문','레이팅','소속','연락처'],
+    ['홍길동','초등부','1200','생각키움','010-0000-0000'],
+    ['김철수','중등부','','',''],
+    ['이영희','','','','']];
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:14},{wch:12},{wch:10},{wch:16},{wch:16}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'선수명단');
+  dl(wb,'선수명단_양식.xlsx');
+}
+
 async function removePlayer(pid){ await saveT({players:S.t.players.filter(p=>p.id!==pid)}); }
 async function togglePlayer(pid){ await saveT({players:S.t.players.map(p=>p.id===pid?{...p,active:p.active===false}:p)}); }
 async function applyPreset(i){ const p=SCORING_PRESETS[i]; await saveT({scoring:{win:p.win,draw:p.draw,loss:p.loss,bye:p.bye}}); }
@@ -434,13 +579,20 @@ const pRating=id=>(S.t.players||[]).find(p=>p.id===id)?.rating||0;
 
 function exportPlayers(){
   const t=S.t;
-  // 스위스매니저 엑셀 가져오기용: 이름/레이팅 중심 단순 표
-  const rows=[['No','Name','Rating','Club/City'],
-    ...(t.players||[]).map((p,i)=>[i+1, p.name, p.rating||'', ''])];
-  const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:5},{wch:20},{wch:8},{wch:14}];
+  const list=t.players||[];
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '선수명단');
+  // 시트1: 스위스매니저 가져오기용 (이름/레이팅/소속)
+  const rows=[['No','Name','Rating','Club/City'],
+    ...list.map((p,i)=>[i+1, p.name, p.rating||'', p.club||''])];
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:5},{wch:20},{wch:8},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, ws, '스위스매니저용');
+  // 시트2: 연맹 보관용 (부문·연락처 포함)
+  const rows2=[['No','이름','부문','레이팅','소속','연락처','상태'],
+    ...list.map((p,i)=>[i+1, p.name, p.group||'', p.rating||'', p.club||'', p.phone||'', p.active===false?'기권':'참가'])];
+  const ws2=XLSX.utils.aoa_to_sheet(rows2);
+  ws2['!cols']=[{wch:5},{wch:14},{wch:12},{wch:8},{wch:16},{wch:16},{wch:8}];
+  XLSX.utils.book_append_sheet(wb, ws2, '연맹보관용');
   dl(wb, `${t.name}_선수명단.xlsx`);
 }
 function exportResults(){
@@ -690,23 +842,62 @@ function viewSettings(t){
 
 function viewPlayers(t){
   const started=(t.rounds||[]).length>0;
-  const rows=(t.players||[]).map((p,i)=>`
+  const list=t.players||[];
+  /* 부문별 인원 요약 */
+  const byGroup={};
+  list.forEach(p=>{ const g=p.group||'미지정'; byGroup[g]=(byGroup[g]||0)+1; });
+  const groupTags=Object.keys(byGroup).length>1
+    ? Object.entries(byGroup).map(([g,n])=>`<span class="pen-tag w" style="margin-right:4px">${esc(g)} ${n}명</span>`).join('')
+    : '';
+
+  const rows=list.map(p=>`
     <div class="list-item" style="opacity:${p.active===false?.45:1}">
-      <div style="font-size:14px"><b>${esc(p.name)}</b> <span class="muted">${p.rating?'R'+p.rating:'무레이팅'}</span>
-        ${p.active===false?'<span style="color:var(--red);font-size:12px"> 기권</span>':''}</div>
+      <div style="font-size:14px">
+        <b>${esc(p.name)}</b>
+        ${p.group?`<span class="pen-tag w" style="margin-left:6px">${esc(p.group)}</span>`:''}
+        <span class="muted" style="margin-left:6px">${p.rating?'R'+p.rating:'무레이팅'}</span>
+        ${p.club?`<span class="muted"> · ${esc(p.club)}</span>`:''}
+        ${p.phone?`<span class="muted"> · ☎ ${esc(p.phone)}</span>`:''}
+        ${p.active===false?'<span style="color:var(--red);font-size:12px"> 기권</span>':''}
+      </div>
       ${started
         ?`<button class="btn-g btn-sm" onclick="togglePlayer('${p.id}')">${p.active===false?'복귀':'기권 처리'}</button>`
         :`<button class="btn-d btn-sm" onclick="removePlayer('${p.id}')">삭제</button>`}
     </div>`).join('');
+
   return `
     <div class="card">
-      <div class="stitle">선수 등록 (${(t.players||[]).length}명)</div>
+      <div class="stitle">📥 명단 한 번에 가져오기</div>
+      <div class="hint">엑셀·CSV 파일을 올리거나, 엑셀에서 복사해 붙여넣으세요. 첫 줄의 컬럼 이름(이름/선수이름/성명, 연락처/전화번호/선수연락처 등)은 <b>표현이 달라도 자동 인식</b>합니다. <b>부문·레이팅·소속·연락처는 비어 있어도 됩니다.</b></div>
+      <div class="row" style="gap:10px;margin-bottom:10px">
+        <label class="btn-p" style="display:inline-flex;align-items:center;cursor:pointer;padding:10px 16px;border-radius:8px">
+          📄 엑셀·CSV 파일 선택
+          <input id="imp-file" type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importFile(this)">
+        </label>
+        <button class="btn-g" onclick="downloadTemplate()">⬇ 양식 내려받기</button>
+      </div>
+      <div class="hint" style="margin-bottom:6px">또는 엑셀에서 범위를 복사해 아래에 붙여넣으세요 (Ctrl+V)</div>
+      <textarea id="imp-paste" rows="4" placeholder="이름	부문	레이팅	소속	연락처
+홍길동	초등부	1200	생각키움	010-0000-0000
+김철수	중등부			"
+        style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn-p" onclick="importPaste()">붙여넣은 내용 읽기</button></div>
+      <div id="imp-result"></div>
+    </div>
+
+    <div class="card">
+      <div class="stitle">선수 등록 (${list.length}명) ${groupTags}</div>
+      <div class="row" style="margin-bottom:6px">
+        <input id="p-name" class="grow" placeholder="선수 이름 *" onkeydown="if(event.key==='Enter')addPlayer()">
+        <input id="p-group" style="width:120px" placeholder="부문(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
+        <input id="p-rating" style="width:110px" type="number" placeholder="레이팅(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
+      </div>
       <div class="row" style="margin-bottom:12px">
-        <input id="p-name" class="grow" placeholder="선수 이름" onkeydown="if(event.key==='Enter')addPlayer()">
-        <input id="p-rating" style="width:120px" type="number" placeholder="레이팅(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
+        <input id="p-club" class="grow" placeholder="소속(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
+        <input id="p-phone" class="grow" placeholder="연락처(선택 · 심판장만 표시)" onkeydown="if(event.key==='Enter')addPlayer()">
         <button class="btn-p" onclick="addPlayer()">추가</button>
       </div>
-      ${rows||'<div class="muted">선수를 추가하세요. 대회 시작 후에는 삭제 대신 기권 처리를 사용합니다.</div>'}
+      ${rows||'<div class="muted">선수를 추가하세요. 이름만 넣어도 등록됩니다. 대회 시작 후에는 삭제 대신 기권 처리를 사용합니다.</div>'}
     </div>`;
 }
 
