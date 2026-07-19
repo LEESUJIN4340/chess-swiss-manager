@@ -133,7 +133,7 @@ const S={
   user:null, isChief:false,
   screen:'role',        // role | list | pin | tour
   tournaments:[], tid:null, t:null, results:{}, penalties:{},
-  tab:'rounds', judgeOk:false, penRound:null,
+  tab:'rounds', judgeOk:false, penRound:null, editPid:null,
   unsubT:null, unsubR:null, unsubP:null, unsubList:null,
 };
 const $=id=>document.getElementById(id);
@@ -463,47 +463,99 @@ async function addPlayer(){
 }
 /* ══════════════ 명단 일괄 가져오기 ══════════════ */
 let IMPORT_BUF=null;   // 미리보기 중인 선수 배열
+let IMPORT_DET={};     // 인식된 컬럼
 
 function showImportResult(res){
-  IMPORT_BUF=res.players;
-  const box=$('imp-result'); if(!box)return;
-  if(res.err && !res.players.length){
-    box.innerHTML=`<div style="color:var(--red);font-size:13px;padding:8px 0">${esc(res.err)}</div>`;
+  IMPORT_BUF=res.players.map(p=>({...p, _use:true}));
+  IMPORT_DET=res.detected||{};
+  if(res.err && !IMPORT_BUF.length){
+    const box=$('imp-result');
+    if(box)box.innerHTML=`<div style="color:var(--red);font-size:13px;padding:8px 0">${esc(res.err)}</div>`;
     return;
   }
-  const cols=Object.entries(res.detected).map(([f,h])=>{
+  renderImportPreview();
+}
+
+function renderImportPreview(){
+  const box=$('imp-result'); if(!box||!IMPORT_BUF)return;
+  const chosen=IMPORT_BUF.filter(p=>p._use).length;
+  const cols=Object.entries(IMPORT_DET).map(([f,h])=>{
     const label={name:'이름',group:'부문',rating:'레이팅',club:'소속',phone:'연락처'}[f];
     return `<span class="pen-tag w" style="margin-right:4px">${label} ← ${esc(h)}</span>`;
   }).join('');
-  const missing=['group','rating','club','phone'].filter(f=>!res.detected[f])
+  const missing=['group','rating','club','phone'].filter(f=>!IMPORT_DET[f])
     .map(f=>({group:'부문',rating:'레이팅',club:'소속',phone:'연락처'}[f]));
-  const preview=res.players.slice(0,5).map((p,i)=>
-    `<tr><td>${i+1}</td><td style="font-weight:700">${esc(p.name)}</td><td class="muted">${esc(p.group)||'-'}</td>
-     <td class="muted">${p.rating||'-'}</td><td class="muted">${esc(p.club)||'-'}</td><td class="muted">${esc(p.phone)||'-'}</td></tr>`).join('');
+
+  /* 중복 이름 표시 (기존 명단 + 목록 내) */
+  const existing=new Set((S.t.players||[]).map(p=>p.name));
+  const seen={};
+  IMPORT_BUF.forEach(p=>{ seen[p.name]=(seen[p.name]||0)+1; });
+
+  const rows=IMPORT_BUF.map((p,i)=>{
+    const dupExist=existing.has(p.name);
+    const dupSelf=seen[p.name]>1;
+    const warn=dupExist?'<span class="pen-tag f" style="margin-left:4px">기존 명단에 있음</span>'
+      :(dupSelf?'<span class="pen-tag f" style="margin-left:4px">중복</span>':'');
+    const inp=(field,val,w,ph)=>`<input value="${esc(val)}" placeholder="${ph}" style="width:${w};padding:5px 7px;border:1px solid var(--line);border-radius:6px;font-size:13px"
+        onchange="editImport(${i},'${field}',this.value)">`;
+    return `<tr style="opacity:${p._use?1:.4}">
+      <td style="text-align:center"><input type="checkbox" ${p._use?'checked':''} onchange="toggleImport(${i})" style="width:17px;height:17px;cursor:pointer"></td>
+      <td class="muted">${i+1}</td>
+      <td>${inp('name',p.name,'110px','이름')}${warn}</td>
+      <td>${inp('group',p.group,'85px','-')}</td>
+      <td>${inp('rating',p.rating||'','65px','-')}</td>
+      <td>${inp('club',p.club,'110px','-')}</td>
+      <td>${inp('phone',p.phone,'125px','-')}</td>
+      <td><button class="btn-d btn-sm" onclick="dropImport(${i})" title="목록에서 제거">✕</button></td>
+    </tr>`;
+  }).join('');
+
   box.innerHTML=`
     <div style="margin-top:12px;padding:12px;border:1px solid var(--green);border-radius:8px;background:var(--green-soft)">
-      <div style="font-weight:700;margin-bottom:6px">✅ ${res.players.length}명을 읽었습니다</div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700">📋 읽어온 명단 ${IMPORT_BUF.length}명 · <span style="color:var(--green)">선택 ${chosen}명</span></div>
+        <div class="row" style="gap:6px">
+          <button class="btn-g btn-sm" onclick="selectAllImport(true)">전체 선택</button>
+          <button class="btn-g btn-sm" onclick="selectAllImport(false)">전체 해제</button>
+        </div>
+      </div>
       <div style="margin-bottom:6px">${cols}</div>
       ${missing.length?`<div class="muted" style="font-size:12px;margin-bottom:8px">인식 안 됨(비워둬도 됩니다): ${missing.join(', ')}</div>`:''}
-      <div class="overflow"><table style="font-size:13px">
-        <tr><th>#</th><th>이름</th><th>부문</th><th>레이팅</th><th>소속</th><th>연락처</th></tr>
-        ${preview}
-        ${res.players.length>5?`<tr><td colspan="6" class="muted">… 외 ${res.players.length-5}명</td></tr>`:''}
-      </table></div>
-      <div class="row" style="gap:8px;margin-top:10px">
-        <button class="btn-p" onclick="confirmImport(false)">＋ 기존 명단에 추가</button>
-        <button class="btn-gold" onclick="confirmImport(true)">↻ 기존 명단 교체</button>
+      <div class="hint" style="margin-bottom:8px">칸을 눌러 직접 고칠 수 있고, 체크를 풀거나 ✕로 제외할 수 있습니다. 확인 후 아래 버튼을 누르세요.</div>
+      <div class="overflow" style="max-height:420px;overflow-y:auto;background:var(--white);border-radius:8px">
+        <table style="font-size:13px">
+          <tr><th style="width:36px"></th><th style="width:34px">#</th><th>이름</th><th>부문</th><th>레이팅</th><th>소속</th><th>연락처</th><th style="width:40px"></th></tr>
+          ${rows||'<tr><td colspan="8" class="muted" style="padding:16px">남은 선수가 없습니다.</td></tr>'}
+        </table>
+      </div>
+      <div class="row" style="gap:8px;margin-top:12px">
+        <button class="btn-p" onclick="confirmImport(false)" ${chosen?'':'disabled'}>＋ 선택한 ${chosen}명 추가</button>
+        <button class="btn-gold" onclick="confirmImport(true)" ${chosen?'':'disabled'}>↻ 기존 명단 교체</button>
         <button class="btn-g" onclick="cancelImport()">취소</button>
       </div>
     </div>`;
 }
-function cancelImport(){ IMPORT_BUF=null; const b=$('imp-result'); if(b)b.innerHTML=''; const f=$('imp-file'); if(f)f.value=''; const t=$('imp-paste'); if(t)t.value=''; }
+function toggleImport(i){ if(!IMPORT_BUF[i])return; IMPORT_BUF[i]._use=!IMPORT_BUF[i]._use; renderImportPreview(); }
+function selectAllImport(v){ IMPORT_BUF.forEach(p=>p._use=v); renderImportPreview(); }
+function dropImport(i){ IMPORT_BUF.splice(i,1); renderImportPreview(); }
+function editImport(i,field,val){
+  if(!IMPORT_BUF[i])return;
+  if(field==='rating'){ const n=String(val).replace(/[^0-9]/g,''); IMPORT_BUF[i].rating=n?parseInt(n):0; }
+  else IMPORT_BUF[i][field]=String(val).trim();
+}
+function cancelImport(){
+  IMPORT_BUF=null; IMPORT_DET={};
+  const b=$('imp-result'); if(b)b.innerHTML='';
+  const f=$('imp-file'); if(f)f.value='';
+  const t=$('imp-paste'); if(t)t.value='';
+}
 async function confirmImport(replace){
-  if(!IMPORT_BUF||!IMPORT_BUF.length)return;
+  if(!IMPORT_BUF)return;
+  const picked=IMPORT_BUF.filter(p=>p._use && p.name).map(({_use,...p})=>p);
+  if(!picked.length){ alert('선택된 선수가 없습니다.'); return; }
   const cur=S.t.players||[];
-  if(replace && cur.length && !confirm(`기존 ${cur.length}명을 지우고 ${IMPORT_BUF.length}명으로 교체할까요?`))return;
-  const next=replace?IMPORT_BUF:[...cur,...IMPORT_BUF];
-  await saveT({players:next});
+  if(replace && cur.length && !confirm(`기존 ${cur.length}명을 지우고 ${picked.length}명으로 교체할까요?`))return;
+  await saveT({players:replace?picked:[...cur,...picked]});
   cancelImport();
 }
 /* 엑셀(.xlsx/.xls) 또는 CSV 파일 */
@@ -544,6 +596,25 @@ function downloadTemplate(){
   dl(wb,'선수명단_양식.xlsx');
 }
 
+async function clearAllPlayers(){
+  const n=(S.t.players||[]).length;
+  if(!n)return;
+  if(!confirm(`등록된 선수 ${n}명을 모두 삭제할까요? 되돌릴 수 없습니다.`))return;
+  await saveT({players:[]});
+}
+async function saveEditPlayer(pid){
+  const nm=$('e-name').value.trim();
+  if(!nm){ alert('이름은 비울 수 없습니다.'); return; }
+  const rRaw=$('e-rating').value.trim();
+  await saveT({players:S.t.players.map(p=>p.id===pid?{
+    ...p, name:nm,
+    group:$('e-group').value.trim(),
+    rating:rRaw?(parseInt(rRaw)||0):0,
+    club:$('e-club').value.trim(),
+    phone:$('e-phone').value.trim(),
+  }:p)});
+  S.editPid=null; render();
+}
 async function removePlayer(pid){ await saveT({players:S.t.players.filter(p=>p.id!==pid)}); }
 async function togglePlayer(pid){ await saveT({players:S.t.players.map(p=>p.id===pid?{...p,active:p.active===false}:p)}); }
 async function applyPreset(i){ const p=SCORING_PRESETS[i]; await saveT({scoring:{win:p.win,draw:p.draw,loss:p.loss,bye:p.bye}}); }
@@ -850,7 +921,20 @@ function viewPlayers(t){
     ? Object.entries(byGroup).map(([g,n])=>`<span class="pen-tag w" style="margin-right:4px">${esc(g)} ${n}명</span>`).join('')
     : '';
 
-  const rows=list.map(p=>`
+  const rows=list.map(p=>{
+    const editing=S.editPid===p.id;
+    if(editing){
+      return `<div class="list-item" style="flex-wrap:wrap;gap:6px;background:var(--green-soft)">
+        <input id="e-name" value="${esc(p.name)}" placeholder="이름 *" style="width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <input id="e-group" value="${esc(p.group||'')}" placeholder="부문" style="width:85px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <input id="e-rating" value="${p.rating||''}" placeholder="레이팅" type="number" style="width:75px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <input id="e-club" value="${esc(p.club||'')}" placeholder="소속" style="width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <input id="e-phone" value="${esc(p.phone||'')}" placeholder="연락처" style="width:125px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <button class="btn-p btn-sm" onclick="saveEditPlayer('${p.id}')">저장</button>
+        <button class="btn-g btn-sm" onclick="S.editPid=null;render()">취소</button>
+      </div>`;
+    }
+    return `
     <div class="list-item" style="opacity:${p.active===false?.45:1}">
       <div style="font-size:14px">
         <b>${esc(p.name)}</b>
@@ -860,10 +944,14 @@ function viewPlayers(t){
         ${p.phone?`<span class="muted"> · ☎ ${esc(p.phone)}</span>`:''}
         ${p.active===false?'<span style="color:var(--red);font-size:12px"> 기권</span>':''}
       </div>
-      ${started
-        ?`<button class="btn-g btn-sm" onclick="togglePlayer('${p.id}')">${p.active===false?'복귀':'기권 처리'}</button>`
-        :`<button class="btn-d btn-sm" onclick="removePlayer('${p.id}')">삭제</button>`}
-    </div>`).join('');
+      <div class="row" style="gap:6px">
+        <button class="btn-g btn-sm" onclick="S.editPid='${p.id}';render()">수정</button>
+        ${started
+          ?`<button class="btn-g btn-sm" onclick="togglePlayer('${p.id}')">${p.active===false?'복귀':'기권 처리'}</button>`
+          :`<button class="btn-d btn-sm" onclick="removePlayer('${p.id}')">삭제</button>`}
+      </div>
+    </div>`;
+  }).join('');
 
   return `
     <div class="card">
@@ -886,7 +974,10 @@ function viewPlayers(t){
     </div>
 
     <div class="card">
-      <div class="stitle">선수 등록 (${list.length}명) ${groupTags}</div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div class="stitle" style="margin:0">선수 등록 (${list.length}명) ${groupTags}</div>
+        ${(!started && list.length)?`<button class="btn-d btn-sm" onclick="clearAllPlayers()">전체 삭제</button>`:''}
+      </div>
       <div class="row" style="margin-bottom:6px">
         <input id="p-name" class="grow" placeholder="선수 이름 *" onkeydown="if(event.key==='Enter')addPlayer()">
         <input id="p-group" style="width:120px" placeholder="부문(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
