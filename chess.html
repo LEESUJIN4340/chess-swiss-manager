@@ -134,8 +134,8 @@ try{
 const S={
   user:null, isChief:false,
   screen:'role',        // role | list | pin | tour
-  tournaments:[], tid:null, t:null, results:{}, penalties:{},
-  tab:'rounds', judgeOk:false, penRound:null, editPid:null, judgeId:null, progGroup:'', progPid:'',
+  tournaments:[], tid:null, t:null, results:{}, resultMeta:{}, penalties:{},
+  tab:'rounds', judgeOk:false, penRound:null, editPid:null, judgeId:null, progGroup:'', progPid:'', standRound:null, standGroup:'',
   unsubT:null, unsubR:null, unsubP:null, unsubList:null,
 };
 const $=id=>document.getElementById(id);
@@ -158,7 +158,12 @@ const TIEBREAK_DEFS=[
   {key:'blacks', label:'흑번 대국 수'},
 ];
 const DEFAULT_CRITERIA=['score','buchholz','sonneborn','direct','wins'];
-const critOf=t=>{ let a=Array.isArray(t.tiebreaks)&&t.tiebreaks.length?[...t.tiebreaks]:[...DEFAULT_CRITERIA]; if(!a.includes('score'))a=['score',...a]; return a; };
+/* 총승점(score)은 체스 규칙상 반드시 1순위 — 항상 맨 앞으로 강제 */
+const critOf=t=>{
+  let a=Array.isArray(t.tiebreaks)&&t.tiebreaks.length?[...t.tiebreaks]:[...DEFAULT_CRITERIA];
+  a=a.filter(k=>k!=='score');      // 어디에 있든 일단 빼고
+  return ['score',...a];           // 맨 앞에 고정
+};
 
 /* ══════════════ 계산 로직 ══════════════ */
 function getResult(rd, pr){
@@ -175,36 +180,67 @@ function resultPoints(result, side, sc){
 }
 function buildStats(t){
   const st={};
-  (t.players||[]).forEach(p=>{ st[p.id]={player:p, score:0, wins:0, blacks:0, opponents:[], games:[], byes:0}; });
+  (t.players||[]).forEach(p=>{ st[p.id]={player:p, score:0, wins:0, blacks:0, opponents:[], games:[], byes:0, realWins:0}; });
   (t.rounds||[]).forEach(rd=>{
     rd.pairings.forEach(pr=>{
       const res=getResult(rd.number, pr);
       if(!res) return;
-      if(res==='bye'){ const s=st[pr.whiteId]; if(s){ s.score+=t.scoring.bye; s.byes++; s.games.push({opp:null,result:'bye'}); } return; }
+      if(res==='bye'){
+        const s=st[pr.whiteId];
+        if(s){
+          s.score+=t.scoring.bye; s.byes++;
+          /* FIDE: 부전승은 Most Wins(승수)에 포함 */
+          if(t.scoring.bye>=t.scoring.win) s.wins++;
+          s.games.push({opp:null, result:'bye', round:rd.number});
+        }
+        return;
+      }
       const w=st[pr.whiteId], b=st[pr.blackId]; if(!w||!b) return;
       w.score+=resultPoints(res,'w',t.scoring); b.score+=resultPoints(res,'b',t.scoring);
-      if(res==='1-0')w.wins++; if(res==='0-1')b.wins++;
+      if(res==='1-0'){ w.wins++; w.realWins++; }
+      if(res==='0-1'){ b.wins++; b.realWins++; }
       b.blacks++;
       w.opponents.push(pr.blackId); b.opponents.push(pr.whiteId);
-      w.games.push({opp:pr.blackId,result:res,side:'w'}); b.games.push({opp:pr.whiteId,result:res,side:'b'});
+      w.games.push({opp:pr.blackId,result:res,side:'w',round:rd.number});
+      b.games.push({opp:pr.whiteId,result:res,side:'b',round:rd.number});
     });
   });
   return st;
 }
+/* FIDE 가상 상대(virtual opponent) 점수
+   = 부전승 시점 본인 점수 + (이후 라운드 수 × 0.5) 로 산출하되,
+     전체 라운드 수 × 0.5 를 넘지 않도록 상한 적용 */
+function virtualOppScore(t, s, byeRound){
+  const half=(t.scoring.draw!==undefined?t.scoring.draw:0.5);
+  const totalR=(t.rounds||[]).length;
+  /* 부전승 라운드까지의 누적 점수 */
+  let upto=0;
+  s.games.forEach(g=>{
+    if(g.round>byeRound) return;
+    if(g.result==='bye'){ upto+=t.scoring.bye; return; }
+    upto+=resultPoints(g.result,g.side,t.scoring)||0;
+  });
+  const after=Math.max(0, totalR-byeRound);
+  const cap=totalR*half;                  // 상한: 전체 라운드 × 0.5
+  return Math.min(upto + after*half, cap);
+}
 function computeTB(t, st){
   const tb={};
   Object.values(st).forEach(s=>{
+    /* 실제 상대 점수 + 부전승은 가상 상대 점수로 대체 */
     const os=s.opponents.map(id=>st[id]?st[id].score:0);
+    s.games.filter(g=>g.result==='bye').forEach(g=>{ os.push(virtualOppScore(t,s,g.round)); });
     const buch=os.reduce((a,b)=>a+b,0);
     const cut1=os.length?buch-Math.min(...os):0;
     let sb=0;
     s.games.forEach(g=>{
+      if(g.result==='bye'){ sb+=virtualOppScore(t,s,g.round); return; }  // 부전승=승리로 간주
       if(!g.opp)return;
       const o=st[g.opp]?st[g.opp].score:0;
       const my=resultPoints(g.result,g.side,t.scoring);
       if(my===t.scoring.win)sb+=o; else if(my===t.scoring.draw)sb+=o/2;
     });
-    tb[s.player.id]={buchholz:buch, buchholzCut1:cut1, sonneborn:sb, wins:s.wins, blacks:s.blacks};
+    tb[s.player.id]={buchholz:buch, buchholzCut1:cut1, sonneborn:sb, wins:s.wins, blacks:s.blacks, realWins:s.realWins, byes:s.byes};
   });
   return tb;
 }
@@ -228,7 +264,7 @@ function roundProgress(t){
         const pr=rd.pairings.find(x=>x.whiteId===p.id||x.blackId===p.id);
         if(pr){
           const r=getResult(n,pr);
-          if(pr.blackId===null){ opp='부전승'; res=r==='bye'?'BYE':''; }
+          if(pr.blackId===null){ opp='(부전승)'; res=r==='bye'?'F승':''; }
           else{
             const isW=pr.whiteId===p.id;
             opp=pName(isW?pr.blackId:pr.whiteId)+(isW?' (백)':' (흑)');
@@ -316,8 +352,9 @@ function listenTour(tid){
     if(S.screen==='tour'||S.screen==='pin')render();
   });
   S.unsubR=col().doc(tid).collection('results').onSnapshot(snap=>{
-    const r={}; snap.docs.forEach(d=>{ r[d.id]=d.data().result; });
-    S.results=r;
+    const r={}, meta={};
+    snap.docs.forEach(d=>{ const v=d.data(); r[d.id]=v.result; meta[d.id]={byName:v.byName||'', at:v.at||0, edited:!!v.edited}; });
+    S.results=r; S.resultMeta=meta;
     if(S.screen==='tour')render();
   });
   /* 경고·반칙 기록 — 라운드별로 문서 1개씩 (r{라운드}_p{선수id}) */
@@ -403,13 +440,28 @@ function canEditBoard(pr, rd){
   }
   return false;
 }
-function judgeLabel(pr){
-  const arr=judgeList().filter(j=>{
-    const saved=S.judgeId; S.judgeId=j.id;
-    const ok=(()=>{ const chief=S.isChief; S.isChief=false; const r=canEditBoard(pr); S.isChief=chief; return r; })();
-    S.judgeId=saved; return ok;
+/* 이 보드를 담당하는 심판 전원 (겹치기 허용) */
+function judgeOwners(pr){
+  return judgeList().filter(j=>{
+    const hasGroup=(j.groups||[]).length>0;
+    const hasBoard=j.boardFrom||j.boardTo;
+    if(!hasGroup && !hasBoard) return false;   // 전체담당은 표시에서 제외
+    if(hasBoard){
+      const f=j.boardFrom||1, t=j.boardTo||9999;
+      if(pr.board>=f && pr.board<=t) return true;
+    }
+    if(hasGroup){
+      const gs=[pr.whiteId,pr.blackId].filter(Boolean)
+        .map(id=>{ const p=(S.t.players||[]).find(x=>x.id===id); return p?(p.group||''):''; });
+      if(gs.some(x=>x && j.groups.includes(x))) return true;
+    }
+    return false;
   });
-  return arr.length===1?judgeFullName(arr[0]):'';
+}
+function judgeLabel(pr){
+  const arr=judgeOwners(pr);
+  if(!arr.length) return '';
+  return arr.map(j=>judgeFullName(j)).join('·');
 }
 async function addJudge(){
   const n=$('j-name').value.trim(); if(!n)return;
@@ -454,11 +506,30 @@ function tryJudgePin(){
   else{ $('pin-err').textContent='PIN이 올바르지 않습니다.'; $('judge-pin').value=''; }
 }
 function pickJudge(jid){ S.judgeId=jid; S.screen='tour'; render(); }
+/* 입력자 이름 (심판장 또는 선택한 심판) */
+function actorName(){
+  if(S.isChief) return '심판장';
+  const j=curJudge();
+  return j?judgeFullName(j):'심판';
+}
 async function setResult(rd, board, result){
+  const rounds=S.t.rounds||[];
+  const isPast=rd<rounds.length;          // 이후 라운드가 이미 페어링됨
+  const prev=S.results[`r${rd}_b${board}`];
+  if(isPast && prev && prev!==result){
+    const ok=confirm(
+      `⚠ ${rd}라운드는 이미 종료되고 ${rd+1}라운드 페어링이 만들어진 상태입니다.\n\n`+
+      `결과를 고치면 승점·부흐홀츠·순위는 즉시 다시 계산되지만, `+
+      `이미 만들어진 ${rd+1}라운드 이후의 페어링은 자동으로 바뀌지 않습니다.\n\n`+
+      `FIDE 규정상 이미 시작된 대국은 그대로 진행하고 결과를 인정하며, `+
+      `잘못된 승점은 다음 라운드부터 바로잡습니다.\n\n`+
+      `수정하시겠습니까?`);
+    if(!ok) return;
+  }
   const id=`r${rd}_b${board}`;
   const ref=col().doc(S.tid).collection('results').doc(id);
   if(result===null) await ref.delete();
-  else await ref.set({result, by:S.user.uid, at:Date.now()});
+  else await ref.set({result, by:S.user.uid, byName:actorName(), at:Date.now(), edited:isPast&&!!prev});
 }
 /* ── 경고·반칙 ── */
 const penKey=(rd,pid)=>`r${rd}_p${pid}`;
@@ -483,12 +554,12 @@ async function bumpPen(rd, pid, field, delta){
     warn: field==='warn'?next:cur.warn,
     foul: field==='foul'?next:cur.foul,
     memo: cur.memo,
-    by:S.user.uid, at:Date.now()
+    by:S.user.uid, byName:actorName(), at:Date.now()
   },{merge:true});
 }
 async function savePenMemo(rd,pid,val){
   const ref=col().doc(S.tid).collection('penalties').doc(penKey(rd,pid));
-  await ref.set({round:rd, playerId:pid, memo:val, by:S.user.uid, at:Date.now()},{merge:true});
+  await ref.set({round:rd, playerId:pid, memo:val, by:S.user.uid, byName:actorName(), at:Date.now()},{merge:true});
 }
 function setPenRound(v){ S.penRound=v===''?null:parseInt(v); render(); }
 
@@ -728,14 +799,17 @@ async function setScoring(field){
   await saveT({scoring:{...S.t.scoring,[field]:v}});
 }
 async function toggleCrit(key){
+  if(key==='score'){ alert('총승점은 순위의 기본 기준이므로 제외할 수 없습니다.'); return; }
   const c=critOf(S.t);
   const next=c.includes(key)?c.filter(k=>k!==key):[...c,key];
-  if(!next.length){ alert('최소 1개의 순위 기준이 필요합니다.'); return; }
+  if(next.length<2){ alert('총승점 외에 최소 1개의 타이브레이크가 필요합니다.'); return; }
   await saveT({tiebreaks:next});
 }
 async function moveCrit(key,dir){
+  if(key==='score'){ alert('총승점은 항상 1순위로 고정됩니다.'); return; }
   const a=critOf(S.t); const i=a.indexOf(key), j=i+dir;
   if(i<0||j<0||j>=a.length)return;
+  if(j===0){ alert('총승점보다 위로 올릴 수 없습니다.'); return; }  // 1순위 자리 침범 방지
   [a[i],a[j]]=[a[j],a[i]];
   await saveT({tiebreaks:a});
 }
@@ -778,7 +852,7 @@ function exportResults(){
     const rows=[['보드','백 (White)','레이팅','결과','흑 (Black)','레이팅']];
     rd.pairings.forEach(pr=>{
       const res=getResult(rd.number,pr);
-      if(pr.blackId===null){ rows.push([pr.board, pName(pr.whiteId), pRating(pr.whiteId)||'', '부전승', '', '']); return; }
+      if(pr.blackId===null){ rows.push([pr.board, pName(pr.whiteId), pRating(pr.whiteId)||'', 'F (부전승)', '', '']); return; }
       const disp=res==='1-0'?'1 - 0':res==='0-1'?'0 - 1':res==='1/2'?'½ - ½':'미입력';
       rows.push([pr.board, pName(pr.whiteId), pRating(pr.whiteId)||'', disp, pName(pr.blackId), pRating(pr.blackId)||'']);
     });
@@ -854,18 +928,18 @@ function exportPenalties(){
   ws1['!cols']=[{wch:16},...head.slice(1).map(()=>({wch:9}))];
   XLSX.utils.book_append_sheet(wb, ws1, '경고반칙 요약');
 
-  /* 시트2: 상세 이력 (사유 메모 포함) */
-  const det=[['라운드','선수','경고','반칙','사유 메모','기록 시각']];
+  /* 시트2: 상세 이력 (사유 메모 + 기록자 포함) */
+  const det=[['라운드','선수','경고','반칙','사유 메모','기록 심판','기록 시각']];
   rounds.forEach(rd=>{
     (t.players||[]).forEach(p=>{
       const d=S.penalties[penKey(rd.number,p.id)];
       if(!d||(!d.warn&&!d.foul&&!d.memo))return;
-      det.push([rd.number, p.name, d.warn||0, d.foul||0, d.memo||'',
+      det.push([rd.number, p.name, d.warn||0, d.foul||0, d.memo||'', d.byName||'',
         d.at?new Date(d.at).toLocaleString('ko-KR'):'']);
     });
   });
   const ws2=XLSX.utils.aoa_to_sheet(det.length>1?det:[det[0],['기록 없음']]);
-  ws2['!cols']=[{wch:8},{wch:16},{wch:7},{wch:7},{wch:40},{wch:20}];
+  ws2['!cols']=[{wch:8},{wch:16},{wch:7},{wch:7},{wch:40},{wch:14},{wch:20}];
   XLSX.utils.book_append_sheet(wb, ws2, '상세 이력');
 
   dl(wb, `${t.name}_경고반칙기록.xlsx`);
@@ -1082,16 +1156,22 @@ function viewSettings(t){
     </label>`).join('');
   const critOn=c.map((k,i)=>{
     const d=TIEBREAK_DEFS.find(x=>x.key===k);
+    if(k==='score'){
+      return `<div class="crit-item" style="background:var(--gold-soft);border-color:var(--gold)">
+        <div style="font-size:14px"><b style="color:var(--gold);margin-right:8px">1</b>🔒 ${d?d.label:k}
+          <span class="muted" style="font-size:12px;margin-left:6px">항상 1순위 고정 (체스 규칙)</span></div>
+      </div>`;
+    }
     return `<div class="crit-item">
       <div style="font-size:14px"><b style="color:var(--green);margin-right:8px">${i+1}</b>✓ ${d?d.label:k}</div>
       <div class="row" style="gap:4px">
-        <button class="btn-g btn-sm" onclick="moveCrit('${k}',-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="btn-g btn-sm" onclick="moveCrit('${k}',-1)" ${i<=1?'disabled':''}>↑</button>
         <button class="btn-g btn-sm" onclick="moveCrit('${k}',1)" ${i===c.length-1?'disabled':''}>↓</button>
         <button class="btn-d btn-sm" onclick="toggleCrit('${k}')">제외</button>
       </div>
     </div>`;
   }).join('');
-  const critOff=TIEBREAK_DEFS.filter(d=>!c.includes(d.key)).map(d=>
+  const critOff=TIEBREAK_DEFS.filter(d=>d.key!=='score'&&!c.includes(d.key)).map(d=>
     `<button class="crit-off" onclick="toggleCrit('${d.key}')">○ ${d.label} — 클릭해서 추가</button>`).join('');
   return `
     <div class="card">
@@ -1214,7 +1294,19 @@ function viewRounds(t, isChief){
   const rounds=t.rounds||[];
   const currentDone=!rounds.length || rounds[rounds.length-1].pairings.every(pr=>getResult(rounds.length,pr)!==null);
   const canNext=currentDone && rounds.length<t.roundsTotal;
-  const top=`
+  /* 페어링 후 수정된 결과 목록 (심판장 확인용) */
+  const edits=[];
+  rounds.forEach(rd=>rd.pairings.forEach(pr=>{
+    const m=S.resultMeta[`r${rd.number}_b${pr.board}`];
+    if(m&&m.edited) edits.push(`${rd.number}R B${pr.board}`);
+  }));
+  const editBanner=edits.length?`
+    <div class="card" style="border-color:var(--red);background:#FCF3F1">
+      <div style="font-weight:700;color:var(--red);margin-bottom:4px">✎ 페어링 후 수정된 결과 ${edits.length}건</div>
+      <div style="font-size:13px;color:#666">${edits.join(' · ')}</div>
+      <div class="hint" style="margin-top:6px">승점·순위는 다시 계산되었습니다. FIDE 규정상 이미 시작된 대국은 그대로 진행하며, 수정된 승점은 <b>다음 라운드 페어링부터</b> 반영됩니다.</div>
+    </div>`:'';
+  const top=editBanner+`
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <div style="font-size:14px">진행: <b>${rounds.length}</b> / ${t.roundsTotal} 라운드
@@ -1226,12 +1318,19 @@ function viewRounds(t, isChief){
     </div>`;
   const cards=rounds.map(rd=>{
     const done=rd.pairings.filter(pr=>getResult(rd.number,pr)!==null).length;
-    const boards=rd.pairings.map(pr=>{
+    /* 담당 보드를 맨 위로 — 심판이 자기 보드를 바로 찾을 수 있게 */
+    const sortedPairs=[...rd.pairings].sort((a,b)=>{
+      const am=canEditBoard(a,rd.number)?0:1, bm=canEditBoard(b,rd.number)?0:1;
+      if(am!==bm)return am-bm;
+      return a.board-b.board;
+    });
+    const myCount=S.isChief?0:sortedPairs.filter(p=>canEditBoard(p,rd.number)).length;
+    const boards=sortedPairs.map(pr=>{
       const res=getResult(rd.number,pr);
       if(pr.blackId===null){
         return `<div class="board done"><div style="font-size:14px">
           <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
-          <b>${esc(pName(pr.whiteId))}</b> <span style="color:var(--gold);font-weight:700">부전승 (+${fmt(t.scoring.bye)})</span></div></div>`;
+          <b>${esc(pName(pr.whiteId))}</b> <span style="color:var(--gold);font-weight:700">F 부전승 (+${fmt(t.scoring.bye)})</span></div></div>`;
       }
       const mine=canEditBoard(pr, rd.number);
       const btn=(val,label)=>`<button class="rbtn ${res===val?'on':''}" ${mine?'':'disabled'}
@@ -1251,14 +1350,19 @@ function viewRounds(t, isChief){
           ${ctr('foul','⛔','반칙','var(--red)')}
         </div>`;
       };
-      const owner=judgeLabel(pr);
+      const owners=judgeOwners(pr);
+      const ownerTxt=owners.length?owners.map(j=>judgeFullName(j)).join('·'):'';
+      const meta=S.resultMeta[`r${rd.number}_b${pr.board}`];
       return `<div class="board ${res?'done':''} ${mine?'':'notmine'}">
         <div style="font-size:14px">
           <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
           <span class="wtag">백</span> <b>${esc(pName(pr.whiteId))}</b>
           <span style="color:#aaa;margin:0 6px">vs</span>
           <span class="btag">흑</span> <b>${esc(pName(pr.blackId))}</b>
-          ${mine?'':`<span class="pen-tag f" style="margin-left:6px">${owner?esc(owner)+' 담당':'담당 아님'}</span>`}
+          ${ownerTxt?`<span class="pen-tag ${mine?'w':'f'}" style="margin-left:6px">${esc(ownerTxt)}${owners.length>1?' 공동':''} 담당</span>`:''}
+          ${(!mine&&!ownerTxt)?`<span class="pen-tag f" style="margin-left:6px">담당 아님</span>`:''}
+          ${(meta&&meta.byName)?`<span class="muted" style="font-size:11px;margin-left:6px">✓ ${esc(meta.byName)} 입력</span>`:''}
+          ${(meta&&meta.edited)?`<span class="pen-tag f" style="margin-left:4px" title="페어링 후 수정됨">✎ 사후수정</span>`:''}
         </div>
         <div class="row" style="gap:4px">${btn('1-0','백 승')}${btn('1/2','무')}${btn('0-1','흑 승')}</div>
         <div class="pen-wrap">
@@ -1268,7 +1372,8 @@ function viewRounds(t, isChief){
       </div>`;
     }).join('');
     return `<div class="card">
-      <div class="stitle">⚔ ${rd.number}라운드 <span class="muted">(${done}/${rd.pairings.length} 입력)</span></div>
+      <div class="stitle">⚔ ${rd.number}라운드 <span class="muted">(${done}/${rd.pairings.length} 입력)</span>
+        ${myCount?`<span class="pen-tag w" style="margin-left:6px">내 담당 ${myCount}보드 (맨 위)</span>`:''}</div>
       ${boards}</div>`;
   }).reverse().join('');
   return top + (cards || '<div class="card"><div class="muted">선수 등록 후 페어링을 생성하면 라운드가 시작됩니다.</div></div>');
@@ -1293,6 +1398,7 @@ function viewPenalties(t, isChief){
   const rows=(t.players||[]).map(p=>{
     const x=getPen(cur,p.id);
     if(!x.warn && !x.foul && !x.memo) return '';
+    const d=S.penalties[penKey(cur,p.id)]||{};
     return `<tr>
       <td style="font-weight:700">${esc(p.name)}</td>
       <td style="text-align:center;color:${x.warn?'var(--gold)':'#ccc'};font-weight:800">${x.warn}</td>
@@ -1301,6 +1407,7 @@ function viewPenalties(t, isChief){
         ? `<input class="pen-memo" value="${esc(x.memo)}" placeholder="사유 메모 (예: 3R B5 터치무브)"
              onchange="savePenMemo(${cur},'${p.id}',this.value)">`
         : `<span class="muted">${esc(x.memo)||'-'}</span>`}</td>
+      <td class="muted" style="font-size:12px;white-space:nowrap">${esc(d.byName||'-')}${d.at?`<br><span style="font-size:11px;color:#bbb">${new Date(d.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</span>`:''}</td>
     </tr>`;
   }).filter(Boolean).join('');
 
@@ -1328,8 +1435,8 @@ function viewPenalties(t, isChief){
     <div class="hint">입력은 「라운드·결과」 탭의 각 대국 카드에서 합니다. 카운트는 <b>라운드마다 0부터 새로 시작</b>하며, 지난 라운드 기록은 아래에 그대로 보존되어 항의가 들어올 때 조회할 수 있습니다.</div>
     <div class="tabs" style="margin-bottom:12px">${rbtns}</div>
     <div class="overflow"><table>
-      <tr><th>선수</th><th style="text-align:center">⚠ 경고</th><th style="text-align:center">⛔ 반칙</th><th>사유 메모</th></tr>
-      ${rows||`<tr><td colspan="4" class="muted" style="padding:16px">${cur}라운드에 기록된 경고·반칙이 없습니다.</td></tr>`}
+      <tr><th>선수</th><th style="text-align:center">⚠ 경고</th><th style="text-align:center">⛔ 반칙</th><th>사유 메모</th><th>기록 심판</th></tr>
+      ${rows||`<tr><td colspan="5" class="muted" style="padding:16px">${cur}라운드에 기록된 경고·반칙이 없습니다.</td></tr>`}
     </table></div>
   </div>
 
@@ -1426,23 +1533,69 @@ function viewProgress(t){
 }
 
 function viewStandings(t){
-  const {list, tb, criteria}=rankPlayers(t);
+  const rounds=t.rounds||[];
+  /* 라운드 선택: null이면 현재(최종) */
+  const sel=(S.standRound&&S.standRound<=rounds.length)?S.standRound:null;
+  const view=sel?{...t, rounds:rounds.filter(r=>r.number<=sel)}:t;
+  const {list, tb, criteria}=rankPlayers(view);
+  /* 직전 라운드 순위(변동 표시용) */
+  let prevRank={};
+  if(sel&&sel>1){
+    const pv=rankPlayers({...t, rounds:rounds.filter(r=>r.number<=sel-1)});
+    pv.list.forEach((s,i)=>{ prevRank[s.player.id]=i+1; });
+  } else if(!sel && rounds.length>1){
+    const pv=rankPlayers({...t, rounds:rounds.filter(r=>r.number<=rounds.length-1)});
+    pv.list.forEach((s,i)=>{ prevRank[s.player.id]=i+1; });
+  }
+
+  const rBtns=rounds.length?`<div class="row" style="gap:4px;margin-bottom:12px;flex-wrap:wrap">
+    <span class="muted" style="font-size:12px;align-self:center;margin-right:4px">시점</span>
+    ${rounds.map(r=>`<button class="pill ${sel===r.number?'on':''}" onclick="S.standRound=${r.number};render()">${r.number}R 종료</button>`).join('')}
+    <button class="pill ${sel?'':'on'}" onclick="S.standRound=null;render()">현재</button>
+  </div>`:'';
+
+  /* 부문 필터 */
+  const allGroups=[...new Set((t.players||[]).map(p=>p.group).filter(Boolean))];
+  const gf=S.standGroup||'';
+  const gBtns=allGroups.length?`<div class="row" style="gap:4px;margin-bottom:12px;flex-wrap:wrap">
+    <span class="muted" style="font-size:12px;align-self:center;margin-right:4px">부문</span>
+    <button class="pill ${gf?'':'on'}" onclick="S.standGroup='';render()">전체</button>
+    ${allGroups.map(g=>`<button class="pill ${gf===g?'on':''}" onclick="S.standGroup='${esc(g)}';render()">${esc(g)}</button>`).join('')}
+  </div>`:'';
+
+  const shown=list.filter(s=>!gf||s.player.group===gf);
   const cols=criteria.filter(k=>k!=='direct'&&k!=='score');
   const lbl={buchholz:'Buch', buchholzCut1:'Buch-1', sonneborn:'SB', wins:'Wins', blacks:'흑번'};
   const head=`<tr><th>순위</th><th>선수</th><th>레이팅</th><th style="color:var(--green)">승점</th>${cols.map(k=>`<th class="muted">${lbl[k]}</th>`).join('')}</tr>`;
-  const rows=list.map((s,i)=>`
+  const rows=shown.map((s,i)=>{
+    const pr=prevRank[s.player.id];
+    const mv=pr?(pr>i+1?`<span style="color:var(--green);font-size:10px">▲${pr-(i+1)}</span>`
+      :(pr<i+1?`<span style="color:var(--red);font-size:10px">▼${(i+1)-pr}</span>`:'<span style="color:#ccc;font-size:10px">-</span>')):'';
+    return `
     <tr class="${i<3?'top3':''}" style="opacity:${s.player.active===false?.5:1}">
-      <td class="rank">${i+1}</td>
-      <td style="font-weight:700">${esc(s.player.name)}${s.player.active===false?' <span style="color:var(--red);font-size:12px">기권</span>':''}</td>
+      <td class="rank">${i+1} ${mv}</td>
+      <td style="font-weight:700">${esc(s.player.name)}
+        ${s.player.group?`<span class="pen-tag w" style="margin-left:4px">${esc(s.player.group)}</span>`:''}
+        ${s.player.active===false?' <span style="color:var(--red);font-size:12px">기권</span>':''}</td>
       <td class="muted">${s.player.rating||'-'}</td>
       <td class="score">${fmt(s.score)}</td>
-      ${cols.map(k=>`<td class="muted">${fmt(tb[s.player.id]?.[k])}</td>`).join('')}
-    </tr>`).join('');
+      ${cols.map(k=>{
+        if(k==='wins'){
+          const b=tb[s.player.id]?.byes||0;
+          return `<td class="muted">${fmt(tb[s.player.id]?.wins)}${b?`<span style="color:var(--gold);font-size:11px" title="부전승 ${b}회 포함"> (F${b})</span>`:''}</td>`;
+        }
+        return `<td class="muted">${fmt(tb[s.player.id]?.[k])}</td>`;
+      }).join('')}
+    </tr>`;
+  }).join('');
   const order=criteria.map((k,i)=>`${i+1}. ${TIEBREAK_DEFS.find(d=>d.key===k)?.label||k}`).join('  →  ');
   return `<div class="card">
-    <div class="stitle">🏆 순위표 <span class="muted">승점 ${fmt(t.scoring.win)}·${fmt(t.scoring.draw)}·${fmt(t.scoring.loss)} 적용</span></div>
+    <div class="stitle">🏆 순위표
+      <span class="muted">${sel?`${sel}라운드 종료 시점`:'현재'} · 승점 ${fmt(t.scoring.win)}·${fmt(t.scoring.draw)}·${fmt(t.scoring.loss)} 적용</span></div>
+    ${rBtns}${gBtns}
     <div class="overflow"><table>${head}${rows||'<tr><td colspan="9" class="muted" style="padding:16px">결과가 입력되면 순위가 계산됩니다.</td></tr>'}</table></div>
     <div class="muted" style="font-size:12px;margin-top:10px">순위 결정 순서: ${order} → 동률 시 레이팅</div>
+    <div class="muted" style="font-size:12px;margin-top:4px">순위 옆 ▲▼는 직전 라운드 대비 변동입니다.</div>
   </div>`;
 }
 
