@@ -135,7 +135,7 @@ const S={
   user:null, isChief:false,
   screen:'role',        // role | list | pin | tour
   tournaments:[], tid:null, t:null, results:{}, resultMeta:{}, penalties:{},
-  tab:'rounds', judgeOk:false, penRound:null, editPid:null, judgeId:null, progGroup:'', progPid:'', standRound:null, standGroup:'',
+  tab:'rounds', judgeOk:false, penRound:null, editPid:null, judgeId:null, progGroup:'', progPid:'', standRound:null, standGroup:'', openLog:null,
   unsubT:null, unsubR:null, unsubP:null, unsubList:null,
 };
 const $=id=>document.getElementById(id);
@@ -548,18 +548,43 @@ function penTotal(pid){
 async function bumpPen(rd, pid, field, delta){
   const cur=getPen(rd,pid);
   const next=Math.max(0,(cur[field]||0)+delta);
+  if(next===cur[field]) return;                 // 변화 없으면 기록 안 함
   const ref=col().doc(S.tid).collection('penalties').doc(penKey(rd,pid));
+  const entry={
+    t:Date.now(), who:actorName(), uid:S.user.uid,
+    act:field, from:cur[field]||0, to:next
+  };
   await ref.set({
     round:rd, playerId:pid,
     warn: field==='warn'?next:cur.warn,
     foul: field==='foul'?next:cur.foul,
     memo: cur.memo,
-    by:S.user.uid, byName:actorName(), at:Date.now()
+    by:S.user.uid, byName:actorName(), at:Date.now(),
+    log: firebase.firestore.FieldValue.arrayUnion(entry)
   },{merge:true});
 }
 async function savePenMemo(rd,pid,val){
+  const cur=getPen(rd,pid);
+  const v=String(val).trim();
+  if(v===(cur.memo||'')) return;
   const ref=col().doc(S.tid).collection('penalties').doc(penKey(rd,pid));
-  await ref.set({round:rd, playerId:pid, memo:val, by:S.user.uid, byName:actorName(), at:Date.now()},{merge:true});
+  const entry={ t:Date.now(), who:actorName(), uid:S.user.uid, act:'memo', text:v };
+  await ref.set({
+    round:rd, playerId:pid, memo:v,
+    memoBy:actorName(), memoAt:Date.now(),
+    by:S.user.uid, byName:actorName(), at:Date.now(),
+    log: firebase.firestore.FieldValue.arrayUnion(entry)
+  },{merge:true});
+}
+/* 기록 이력 조회 */
+function penLog(rd,pid){
+  const d=S.penalties[penKey(rd,pid)];
+  return (d&&Array.isArray(d.log))?[...d.log].sort((a,b)=>b.t-a.t):[];
+}
+function togglePenLog(rd,pid){
+  const k=`${rd}_${pid}`;
+  S.openLog=(S.openLog===k)?null:k;
+  render();
 }
 function setPenRound(v){ S.penRound=v===''?null:parseInt(v); render(); }
 
@@ -941,6 +966,21 @@ function exportPenalties(){
   const ws2=XLSX.utils.aoa_to_sheet(det.length>1?det:[det[0],['기록 없음']]);
   ws2['!cols']=[{wch:8},{wch:16},{wch:7},{wch:7},{wch:40},{wch:14},{wch:20}];
   XLSX.utils.book_append_sheet(wb, ws2, '상세 이력');
+
+  /* 시트3: 전체 기록 로그 (누가 언제 무엇을 했는지 — 항의 대응 근거) */
+  const log=[['일시','기록자','라운드','선수','구분','내용']];
+  rounds.forEach(rd=>{
+    (t.players||[]).forEach(p=>{
+      penLog(rd.number,p.id).slice().reverse().forEach(e=>{
+        const kind=e.act==='warn'?'경고':(e.act==='foul'?'반칙':'사유 작성');
+        const body=e.act==='memo'?(e.text||''):`${e.from} → ${e.to}${e.to>e.from?' (부여)':' (취소)'}`;
+        log.push([new Date(e.t).toLocaleString('ko-KR'), e.who||'', rd.number, p.name, kind, body]);
+      });
+    });
+  });
+  const ws3=XLSX.utils.aoa_to_sheet(log.length>1?log:[log[0],['기록 없음']]);
+  ws3['!cols']=[{wch:20},{wch:14},{wch:8},{wch:14},{wch:10},{wch:40}];
+  XLSX.utils.book_append_sheet(wb, ws3, '기록 로그');
 
   dl(wb, `${t.name}_경고반칙기록.xlsx`);
 }
@@ -1337,6 +1377,8 @@ function viewRounds(t, isChief){
         onclick="${mine?`setResult(${rd.number},${pr.board},${res===val?'null':`'${val}'`})`:''}">${label}</button>`;
       const penBox=(pid,label)=>{
         const p=getPen(rd.number,pid);
+        const d=S.penalties[penKey(rd.number,pid)]||{};
+        const has=p.warn||p.foul;
         const ctr=(f,ico,txt,color)=>`
           <span class="pen-ctr">
             <span class="pen-lbl" style="color:${color}">${ico} ${txt}</span>
@@ -1344,10 +1386,15 @@ function viewRounds(t, isChief){
             <b class="pen-num ${p[f]?'hot':''}">${p[f]}</b>
             <button class="pen-btn" ${mine?'':'disabled'} onclick="${mine?`bumpPen(${rd.number},'${pid}','${f}',1)`:''}">＋</button>
           </span>`;
-        return `<div class="pen-row">
+        return `<div class="pen-row" style="flex-wrap:wrap">
           <span class="pen-name">${label} ${esc(pName(pid))}</span>
           ${ctr('warn','⚠','경고','var(--gold)')}
           ${ctr('foul','⛔','반칙','var(--red)')}
+          ${has?`<span class="muted" style="font-size:11px">${d.byName?'✓ '+esc(d.byName):''}</span>`:''}
+          ${has?`<input class="pen-memo" style="flex-basis:100%;margin-top:4px" value="${esc(p.memo)}"
+              placeholder="사유를 적어주세요 (예: 터치무브 위반, 기물 넘어뜨림)"
+              ${mine?'':'disabled'} onchange="${mine?`savePenMemo(${rd.number},'${pid}',this.value)`:''}">`:''}
+          ${(has&&d.memoBy)?`<span class="muted" style="font-size:11px">✎ ${esc(d.memoBy)} 작성${d.memoAt?' · '+new Date(d.memoAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''}</span>`:''}
         </div>`;
       };
       const owners=judgeOwners(pr);
@@ -1399,16 +1446,32 @@ function viewPenalties(t, isChief){
     const x=getPen(cur,p.id);
     if(!x.warn && !x.foul && !x.memo) return '';
     const d=S.penalties[penKey(cur,p.id)]||{};
+    const lg=penLog(cur,p.id);
+    const open=S.openLog===`${cur}_${p.id}`;
+    const logRow=open?`<tr><td colspan="6" style="background:var(--bg);padding:10px 14px">
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px">📜 기록 이력 (${lg.length}건)</div>
+      ${lg.length?lg.map(e=>{
+        const ico=e.act==='warn'?'⚠ 경고':(e.act==='foul'?'⛔ 반칙':'✎ 사유');
+        const chg=e.act==='memo'?`"${esc(e.text||'')}"`:`${e.from} → ${e.to}${e.to>e.from?' (부여)':' (취소)'}`;
+        return `<div style="font-size:12px;padding:3px 0;border-bottom:1px dashed var(--line)">
+          <span style="color:#888">${new Date(e.t).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>
+          <b style="margin:0 6px">${esc(e.who||'?')}</b>
+          <span>${ico} ${chg}</span>
+        </div>`;
+      }).join(''):'<div class="muted" style="font-size:12px">이력이 없습니다. (이전 버전에서 기록된 항목)</div>'}
+    </td></tr>`:'';
     return `<tr>
       <td style="font-weight:700">${esc(p.name)}</td>
       <td style="text-align:center;color:${x.warn?'var(--gold)':'#ccc'};font-weight:800">${x.warn}</td>
       <td style="text-align:center;color:${x.foul?'var(--red)':'#ccc'};font-weight:800">${x.foul}</td>
       <td>${isChief
-        ? `<input class="pen-memo" value="${esc(x.memo)}" placeholder="사유 메모 (예: 3R B5 터치무브)"
+        ? `<input class="pen-memo" value="${esc(x.memo)}" placeholder="사유 메모"
              onchange="savePenMemo(${cur},'${p.id}',this.value)">`
-        : `<span class="muted">${esc(x.memo)||'-'}</span>`}</td>
+        : `<span class="muted">${esc(x.memo)||'-'}</span>`}
+        ${d.memoBy?`<div class="muted" style="font-size:11px">✎ ${esc(d.memoBy)} 작성</div>`:''}</td>
       <td class="muted" style="font-size:12px;white-space:nowrap">${esc(d.byName||'-')}${d.at?`<br><span style="font-size:11px;color:#bbb">${new Date(d.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</span>`:''}</td>
-    </tr>`;
+      <td style="text-align:center"><button class="btn-g btn-sm" onclick="togglePenLog(${cur},'${p.id}')">${open?'접기':`이력 ${lg.length}`}</button></td>
+    </tr>${logRow}`;
   }).filter(Boolean).join('');
 
   /* 대회 전체 누적 */
@@ -1432,11 +1495,11 @@ function viewPenalties(t, isChief){
   return `
   <div class="card">
     <div class="stitle">⚠ 라운드별 경고·반칙</div>
-    <div class="hint">입력은 「라운드·결과」 탭의 각 대국 카드에서 합니다. 카운트는 <b>라운드마다 0부터 새로 시작</b>하며, 지난 라운드 기록은 아래에 그대로 보존되어 항의가 들어올 때 조회할 수 있습니다.</div>
+    <div class="hint">경고·반칙과 <b>사유는 담당 심판이 직접</b> 「라운드·결과」 탭의 대국 카드에서 입력합니다. 카운트는 <b>라운드마다 0부터 새로 시작</b>하며 지난 기록은 그대로 보존됩니다. 모든 기록에 <b>누가 언제 했는지가 남으며</b>, 오른쪽 「이력」 버튼으로 확인할 수 있습니다.</div>
     <div class="tabs" style="margin-bottom:12px">${rbtns}</div>
     <div class="overflow"><table>
-      <tr><th>선수</th><th style="text-align:center">⚠ 경고</th><th style="text-align:center">⛔ 반칙</th><th>사유 메모</th><th>기록 심판</th></tr>
-      ${rows||`<tr><td colspan="5" class="muted" style="padding:16px">${cur}라운드에 기록된 경고·반칙이 없습니다.</td></tr>`}
+      <tr><th>선수</th><th style="text-align:center">⚠ 경고</th><th style="text-align:center">⛔ 반칙</th><th>사유 메모</th><th>최종 기록자</th><th style="text-align:center">이력</th></tr>
+      ${rows||`<tr><td colspan="6" class="muted" style="padding:16px">${cur}라운드에 기록된 경고·반칙이 없습니다.</td></tr>`}
     </table></div>
   </div>
 
