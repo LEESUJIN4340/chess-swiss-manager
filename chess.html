@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>김포시체스연맹 대회 운영</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#F7F8F5; --ink:#1C2321; --green:#1E4D3B; --green-soft:#E4EEE7;
+    --gold:#B8860B; --gold-soft:#F6EDD8; --line:#D8DCD4; --red:#9E3B2F; --white:#fff;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--ink); font-family:'Pretendard','Noto Sans KR',system-ui,sans-serif; min-height:100vh;}
+  header{background:var(--green); color:#fff; padding:16px 20px;}
+  .hwrap{max-width:900px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .htitle{font-size:17px; font-weight:800;}
+  .hsub{font-size:11px; opacity:.75;}
+  main{max-width:900px; margin:0 auto; padding:20px 14px 60px;}
+  .card{background:var(--white); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:16px;}
+  .card.gold{border-color:var(--gold); border-width:1.5px;}
+  .card.green{border-color:var(--green); border-width:1.5px;}
+  .stitle{display:flex; align-items:center; justify-content:space-between; font-size:15px; font-weight:700; margin-bottom:12px;}
+  .hint{font-size:13px; color:#666; margin-bottom:12px; line-height:1.5;}
+  .muted{color:#888; font-size:13px;}
+  input,select{padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:14px; font-family:inherit;}
+  input:focus{outline:2px solid var(--green-soft);}
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .grow{flex:1; min-width:120px;}
+  button{cursor:pointer; border-radius:8px; font-weight:600; font-size:14px; font-family:inherit; padding:10px 16px; border:none;}
+  button:disabled{opacity:.45; cursor:not-allowed;}
+  .btn-p{background:var(--green); color:#fff;}
+  .btn-g{background:transparent; color:var(--green); border:1px solid var(--green);}
+  .btn-d{background:transparent; color:var(--red); border:1px solid var(--red);}
+  .btn-gold{background:var(--gold); color:#fff;}
+  .btn-sm{padding:6px 12px; font-size:13px;}
+  .tabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .tab{background:var(--white); border:1px solid var(--line); color:var(--ink); padding:9px 15px;}
+  .tab.on{background:var(--green); border-color:var(--green); color:#fff;}
+  .badge{font-size:12px; font-weight:700; padding:3px 10px; border-radius:12px; border:1px solid;}
+  .badge.chief{background:var(--gold-soft); color:var(--gold); border-color:var(--gold);}
+  .badge.judge{background:var(--green-soft); color:var(--green); border-color:var(--green);}
+  .pill{padding:8px 14px; border-radius:20px; font-size:13px; font-weight:600; background:var(--white); border:1.5px solid var(--line);}
+  .pill.on{background:var(--gold-soft); border-color:var(--gold); color:var(--gold);}
+  .list-item{display:flex; align-items:center; justify-content:space-between; border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:8px; background:var(--bg); gap:8px; flex-wrap:wrap;}
+  .board{border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;}
+  .board.done{background:var(--green-soft);}
+  .rbtn{padding:6px 12px; border-radius:6px; font-size:13px; font-weight:700; background:var(--white); border:1px solid var(--line); color:var(--ink);}
+  .rbtn.on{background:var(--green); border-color:var(--green); color:#fff;}
+  /* 경고·반칙 카운터 */
+  .pen-wrap{flex-basis:100%; border-top:1px dashed var(--line); margin-top:8px; padding-top:8px; display:flex; flex-direction:column; gap:6px;}
+  .pen-row{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .pen-name{font-size:12.5px; color:#666; min-width:120px;}
+  .pen-ctr{display:inline-flex; align-items:center; gap:4px;}
+  .pen-lbl{font-size:12px; font-weight:700; margin-right:2px;}
+  .pen-btn{width:26px; height:26px; padding:0; border-radius:6px; border:1px solid var(--line);
+    background:var(--white); color:var(--ink); font-size:15px; font-weight:700; line-height:1;}
+  .pen-btn:disabled{opacity:.3;}
+  .pen-num{display:inline-block; min-width:20px; text-align:center; font-size:14px; color:#999;}
+  .pen-num.hot{color:var(--red); font-weight:800;}
+  .pen-memo{width:100%; font-size:13px; padding:6px 10px;}
+  .pen-tag{display:inline-block; font-size:11px; font-weight:700; padding:1px 6px; border-radius:8px; margin-left:4px;}
+  .pen-tag.w{background:var(--gold-soft); color:var(--gold);}
+  .pen-tag.f{background:#F7E4E1; color:var(--red);}
+  .wtag{background:#fff; border:1px solid var(--line); border-radius:4px; padding:1px 6px; font-size:12px;}
+  .btag{background:var(--ink); color:#fff; border-radius:4px; padding:1px 6px; font-size:12px;}
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  th{text-align:left; padding:8px 6px; border-bottom:2px solid var(--green);}
+  td{padding:8px 6px; border-bottom:1px solid var(--line);}
+  tr.top3{background:var(--gold-soft);}
+  .rank{font-weight:800;}
+  tr.top3 .rank{color:var(--gold);}
+  .score{font-weight:800; color:var(--green); font-size:15px;}
+  .crit-item{display:flex; align-items:center; justify-content:space-between; border:1px solid var(--green); background:var(--green-soft); border-radius:8px; padding:8px 12px; margin-bottom:6px; gap:6px; flex-wrap:wrap;}
+  .crit-off{display:flex; align-items:center; gap:8px; border:1px dashed var(--line); border-radius:8px; padding:8px 12px; margin-bottom:6px; width:100%; font-size:14px; color:#888; background:var(--white); text-align:left;}
+  .center-box{max-width:420px; margin:40px auto 0;}
+  .err{color:var(--red); font-size:13px; margin:6px 0; text-align:center;}
+  .ok{color:var(--green); font-size:13px; font-weight:700;}
+  .pin-input{width:100%; font-size:18px; letter-spacing:.3em; text-align:center;}
+  label.fld{font-size:13px; font-weight:600; display:block;}
+  label.fld input, label.fld select{display:block; width:100%; margin-top:6px;}
+  .num{width:80px; text-align:center; font-weight:600; font-size:15px;}
+  h3.sub{font-size:14px; font-weight:700; margin:14px 0 8px;}
+  .overflow{overflow-x:auto;}
+  @media (max-width:520px){ .htitle{font-size:15px;} }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+  ★★★ 설정 구역 — 여기만 수정하면 됩니다 ★★★
+  Firebase 콘솔 > 프로젝트 설정 > 내 앱 > SDK 설정에서 복사한
+  firebaseConfig 값을 아래에 붙여넣으세요. (안내서 3단계 참고)
+════════════════════════════════════════════════════════════ -->
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyDQAzZwW5haqobyH0BEafLCpans0AgwXv4",
+  authDomain: "gimpo-chess.firebaseapp.com",
+  projectId: "gimpo-chess",
+  storageBucket: "gimpo-chess.firebasestorage.app",
+  messagingSenderId: "398807893824",
+  appId: "1:398807893824:web:6c9ef5973d01a56f0b5ca5"
+};
+</script>
+<!-- ═══════════════════ 설정 구역 끝 ═══════════════════ -->
+
+<header>
+  <div class="hwrap">
+    <div>
+      <div class="htitle">♔ 김포시체스연맹 대회 운영</div>
+      <div class="hsub">Swiss System Tournament Manager · Firebase</div>
+    </div>
+    <div id="header-right"></div>
+  </div>
+</header>
+<main id="app"><div class="card"><div class="muted">불러오는 중…</div></div></main>
+
+<script>
+/* ══════════════ 초기화 ══════════════ */
+let db=null, auth=null, configOk=false;
+try{
+  if(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('붙여넣기')){
+    firebase.initializeApp(firebaseConfig);
+    auth=firebase.auth(); db=firebase.firestore(); configOk=true;
+  }
+}catch(e){ console.error(e); }
+
+/* ══════════════ 상태 ══════════════ */
+const S={
+  user:null, isChief:false,
+  screen:'role',        // role | list | pin | tour
+  tournaments:[], tid:null, t:null, results:{}, penalties:{},
+  tab:'rounds', judgeOk:false, penRound:null,
+  unsubT:null, unsubR:null, unsubP:null, unsubList:null,
+};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>{ if(n===null||n===undefined||isNaN(n))return'-'; return Number.isInteger(n)?String(n):(Math.round(n*100)/100).toString(); };
+
+/* ══════════════ 순위 기준 정의 ══════════════ */
+const SCORING_PRESETS=[
+  {key:'fide', label:'FIDE 표준 (1·½·0)', win:1, draw:0.5, loss:0, bye:1},
+  {key:'three', label:'3점제 (3·1·0)', win:3, draw:1, loss:0, bye:3},
+  {key:'kids', label:'유소년 (2·1·0)', win:2, draw:1, loss:0, bye:2},
+];
+const TIEBREAK_DEFS=[
+  {key:'score', label:'총승점 (Total Score)'},
+  {key:'buchholz', label:'부흐홀츠 (상대 승점 합)'},
+  {key:'buchholzCut1', label:'부흐홀츠-1 (최저 상대 제외)'},
+  {key:'sonneborn', label:'손네본-베르거'},
+  {key:'direct', label:'승자승 (직접 대결)'},
+  {key:'wins', label:'Most Wins (승리 수)'},
+  {key:'blacks', label:'흑번 대국 수'},
+];
+const DEFAULT_CRITERIA=['score','buchholz','sonneborn','direct','wins'];
+const critOf=t=>{ let a=Array.isArray(t.tiebreaks)&&t.tiebreaks.length?[...t.tiebreaks]:[...DEFAULT_CRITERIA]; if(!a.includes('score'))a=['score',...a]; return a; };
+
+/* ══════════════ 계산 로직 ══════════════ */
+function getResult(rd, pr){
+  if(pr.blackId===null) return 'bye';
+  return S.results[`r${rd}_b${pr.board}`] ?? null;
+}
+function resultPoints(result, side, sc){
+  if(!result) return null;
+  if(result==='bye') return sc.bye;
+  if(result==='1/2') return sc.draw;
+  if(result==='1-0') return side==='w'?sc.win:sc.loss;
+  if(result==='0-1') return side==='b'?sc.win:sc.loss;
+  return null;
+}
+function buildStats(t){
+  const st={};
+  (t.players||[]).forEach(p=>{ st[p.id]={player:p, score:0, wins:0, blacks:0, opponents:[], games:[], byes:0}; });
+  (t.rounds||[]).forEach(rd=>{
+    rd.pairings.forEach(pr=>{
+      const res=getResult(rd.number, pr);
+      if(!res) return;
+      if(res==='bye'){ const s=st[pr.whiteId]; if(s){ s.score+=t.scoring.bye; s.byes++; s.games.push({opp:null,result:'bye'}); } return; }
+      const w=st[pr.whiteId], b=st[pr.blackId]; if(!w||!b) return;
+      w.score+=resultPoints(res,'w',t.scoring); b.score+=resultPoints(res,'b',t.scoring);
+      if(res==='1-0')w.wins++; if(res==='0-1')b.wins++;
+      b.blacks++;
+      w.opponents.push(pr.blackId); b.opponents.push(pr.whiteId);
+      w.games.push({opp:pr.blackId,result:res,side:'w'}); b.games.push({opp:pr.whiteId,result:res,side:'b'});
+    });
+  });
+  return st;
+}
+function computeTB(t, st){
+  const tb={};
+  Object.values(st).forEach(s=>{
+    const os=s.opponents.map(id=>st[id]?st[id].score:0);
+    const buch=os.reduce((a,b)=>a+b,0);
+    const cut1=os.length?buch-Math.min(...os):0;
+    let sb=0;
+    s.games.forEach(g=>{
+      if(!g.opp)return;
+      const o=st[g.opp]?st[g.opp].score:0;
+      const my=resultPoints(g.result,g.side,t.scoring);
+      if(my===t.scoring.win)sb+=o; else if(my===t.scoring.draw)sb+=o/2;
+    });
+    tb[s.player.id]={buchholz:buch, buchholzCut1:cut1, sonneborn:sb, wins:s.wins, blacks:s.blacks};
+  });
+  return tb;
+}
+function rankPlayers(t){
+  const st=buildStats(t), tb=computeTB(t,st), list=Object.values(st), criteria=critOf(t);
+  const direct=(a,b)=>{
+    let ap=0,bp=0,met=false;
+    a.games.forEach(g=>{ if(g.opp===b.player.id){met=true; ap+=resultPoints(g.result,g.side,t.scoring)||0;} });
+    b.games.forEach(g=>{ if(g.opp===a.player.id) bp+=resultPoints(g.result,g.side,t.scoring)||0; });
+    return met? bp-ap : 0;
+  };
+  list.sort((a,b)=>{
+    for(const k of criteria){
+      if(k==='score'){ if(b.score!==a.score) return b.score-a.score; }
+      else if(k==='direct'){ const d=direct(a,b); if(d!==0) return d; }
+      else{ const av=tb[a.player.id][k]??0, bv=tb[b.player.id][k]??0; if(bv!==av) return bv-av; }
+    }
+    return (b.player.rating||0)-(a.player.rating||0);
+  });
+  return {list, tb, criteria};
+}
+function generatePairing(t){
+  const st=buildStats(t);
+  const active=(t.players||[]).filter(p=>p.active!==false);
+  const sorted=[...active].sort((a,b)=>{
+    const sa=st[a.id]?.score||0, sb=st[b.id]?.score||0;
+    if(sb!==sa)return sb-sa; return (b.rating||0)-(a.rating||0);
+  });
+  const played={}; active.forEach(p=>{ played[p.id]=new Set(st[p.id]?.opponents||[]); });
+  let pool=[...sorted], byeP=null;
+  if(pool.length%2===1){
+    for(let i=pool.length-1;i>=0;i--){ if((st[pool[i].id]?.byes||0)===0){ byeP=pool[i]; pool.splice(i,1); break; } }
+    if(!byeP) byeP=pool.pop();
+  }
+  const cd={};
+  active.forEach(p=>{
+    const s=st[p.id]; if(!s){cd[p.id]=0;return;}
+    const w=s.games.filter(g=>g.side==='w'&&g.result!=='bye').length;
+    cd[p.id]=w-s.blacks;
+  });
+  const pairs=[], used=new Set();
+  for(let i=0;i<pool.length;i++){
+    const a=pool[i]; if(used.has(a.id))continue;
+    let partner=null;
+    for(let j=i+1;j<pool.length;j++){ const b=pool[j]; if(!used.has(b.id)&&!played[a.id].has(b.id)){partner=b;break;} }
+    if(!partner){ for(let j=i+1;j<pool.length;j++){ const b=pool[j]; if(!used.has(b.id)){partner=b;break;} } }
+    if(!partner)continue;
+    used.add(a.id); used.add(partner.id);
+    let wP=a, bP=partner;
+    if((cd[a.id]||0)>(cd[partner.id]||0)){ wP=partner; bP=a; }
+    pairs.push({whiteId:wP.id, blackId:bP.id});
+  }
+  const pairings=pairs.map((p,i)=>({board:i+1, whiteId:p.whiteId, blackId:p.blackId}));
+  if(byeP) pairings.push({board:pairings.length+1, whiteId:byeP.id, blackId:null});
+  return pairings;
+}
+
+/* ══════════════ Firestore ══════════════ */
+const col=()=>db.collection('tournaments');
+async function saveT(patch){
+  await col().doc(S.tid).update(patch);
+}
+function listenList(){
+  if(S.unsubList)S.unsubList();
+  S.unsubList=col().orderBy('createdAt','desc').onSnapshot(snap=>{
+    S.tournaments=snap.docs.map(d=>({id:d.id, ...d.data()}));
+    if(S.screen==='list')render();
+  }, err=>{ console.error(err); });
+}
+function listenTour(tid){
+  if(S.unsubT)S.unsubT(); if(S.unsubR)S.unsubR();
+  S.unsubT=col().doc(tid).onSnapshot(doc=>{
+    if(!doc.exists){ leaveTour(); return; }
+    S.t={id:doc.id, ...doc.data()};
+    if(S.screen==='tour'||S.screen==='pin')render();
+  });
+  S.unsubR=col().doc(tid).collection('results').onSnapshot(snap=>{
+    const r={}; snap.docs.forEach(d=>{ r[d.id]=d.data().result; });
+    S.results=r;
+    if(S.screen==='tour')render();
+  });
+  /* 경고·반칙 기록 — 라운드별로 문서 1개씩 (r{라운드}_p{선수id}) */
+  S.unsubP=col().doc(tid).collection('penalties').onSnapshot(snap=>{
+    const p={}; snap.docs.forEach(d=>{ p[d.id]=d.data(); });
+    S.penalties=p;
+    if(S.screen==='tour')render();
+  });
+}
+function leaveTour(){
+  if(S.unsubT)S.unsubT(); if(S.unsubR)S.unsubR(); if(S.unsubP)S.unsubP();
+  S.tid=null; S.t=null; S.results={}; S.penalties={}; S.judgeOk=false; S.screen='list'; render();
+}
+
+/* ══════════════ 인증 ══════════════ */
+if(configOk){
+  auth.onAuthStateChanged(u=>{
+    S.user=u;
+    S.isChief=!!(u&&u.email);
+    if(!u){ S.screen='role'; }
+    else if(S.screen==='role'){ S.screen='list'; listenList(); }
+    render();
+  });
+}
+async function chiefLogin(){
+  const em=$('chief-email').value.trim(), pw=$('chief-pw').value;
+  try{ await auth.signInWithEmailAndPassword(em,pw); }
+  catch(e){ $('role-err').textContent='로그인 실패: 이메일 또는 비밀번호를 확인하세요.'; }
+}
+async function judgeLogin(){
+  try{ await auth.signInAnonymously(); }
+  catch(e){ $('role-err').textContent='입장 실패: 네트워크를 확인하세요. (익명 로그인 활성화 필요)'; }
+}
+async function logout(){ if(S.unsubList)S.unsubList(); if(S.unsubT)S.unsubT(); if(S.unsubR)S.unsubR(); if(S.unsubP)S.unsubP(); await auth.signOut(); S.screen='role'; render(); }
+
+/* ══════════════ 동작 ══════════════ */
+async function createTour(){
+  const name=$('new-name').value.trim()||'새 대회';
+  const ref=await col().add({
+    name, roundsTotal:5,
+    scoring:{win:1,draw:0.5,loss:0,bye:1},
+    tiebreaks:[...DEFAULT_CRITERIA],
+    judgePin:'1234',
+    players:[], rounds:[],
+    createdAt:Date.now(),
+  });
+  openTour(ref.id);
+}
+function openTour(tid){
+  S.tid=tid; S.judgeOk=false; S.tab='rounds';
+  listenTour(tid);
+  S.screen=S.isChief?'tour':'pin';
+  render();
+}
+async function delTour(tid){
+  if(!confirm('이 대회를 삭제할까요? 결과도 함께 삭제됩니다.'))return;
+  const rs=await col().doc(tid).collection('results').get();
+  const batch=db.batch();
+  rs.docs.forEach(d=>batch.delete(d.ref));
+  batch.delete(col().doc(tid));
+  await batch.commit();
+}
+function tryJudgePin(){
+  const v=$('judge-pin').value;
+  if(S.t && v===S.t.judgePin){ S.judgeOk=true; S.screen='tour'; render(); }
+  else{ $('pin-err').textContent='PIN이 올바르지 않습니다.'; $('judge-pin').value=''; }
+}
+async function setResult(rd, board, result){
+  const id=`r${rd}_b${board}`;
+  const ref=col().doc(S.tid).collection('results').doc(id);
+  if(result===null) await ref.delete();
+  else await ref.set({result, by:S.user.uid, at:Date.now()});
+}
+/* ── 경고·반칙 ── */
+const penKey=(rd,pid)=>`r${rd}_p${pid}`;
+function getPen(rd,pid){
+  const d=S.penalties[penKey(rd,pid)];
+  return { warn:(d&&d.warn)||0, foul:(d&&d.foul)||0, memo:(d&&d.memo)||'' };
+}
+/* 선수의 전 라운드 누적 (기록 조회용) */
+function penTotal(pid){
+  let warn=0, foul=0;
+  Object.keys(S.penalties).forEach(k=>{
+    if(k.endsWith('_p'+pid)){ const d=S.penalties[k]; warn+=(d.warn||0); foul+=(d.foul||0); }
+  });
+  return {warn, foul};
+}
+async function bumpPen(rd, pid, field, delta){
+  const cur=getPen(rd,pid);
+  const next=Math.max(0,(cur[field]||0)+delta);
+  const ref=col().doc(S.tid).collection('penalties').doc(penKey(rd,pid));
+  await ref.set({
+    round:rd, playerId:pid,
+    warn: field==='warn'?next:cur.warn,
+    foul: field==='foul'?next:cur.foul,
+    memo: cur.memo,
+    by:S.user.uid, at:Date.now()
+  },{merge:true});
+}
+async function savePenMemo(rd,pid,val){
+  const ref=col().doc(S.tid).collection('penalties').doc(penKey(rd,pid));
+  await ref.set({round:rd, playerId:pid, memo:val, by:S.user.uid, at:Date.now()},{merge:true});
+}
+function setPenRound(v){ S.penRound=v===''?null:parseInt(v); render(); }
+
+async function startNextRound(){
+  const t=S.t;
+  if((t.players||[]).filter(p=>p.active!==false).length<2){ alert('활성 선수가 2명 이상 필요합니다.'); return; }
+  const pairings=generatePairing(t);
+  await saveT({rounds:[...(t.rounds||[]), {number:(t.rounds||[]).length+1, pairings}]});
+}
+async function addPlayer(){
+  const n=$('p-name').value.trim(); if(!n)return;
+  const r=parseInt($('p-rating').value)||0;
+  await saveT({players:[...(S.t.players||[]), {id:Math.random().toString(36).slice(2,10), name:n, rating:r, active:true}]});
+  $('p-name').value=''; $('p-rating').value=''; $('p-name').focus();
+}
+async function removePlayer(pid){ await saveT({players:S.t.players.filter(p=>p.id!==pid)}); }
+async function togglePlayer(pid){ await saveT({players:S.t.players.map(p=>p.id===pid?{...p,active:p.active===false}:p)}); }
+async function applyPreset(i){ const p=SCORING_PRESETS[i]; await saveT({scoring:{win:p.win,draw:p.draw,loss:p.loss,bye:p.bye}}); }
+async function setScoring(field){
+  const v=parseFloat($('sc-'+field).value); if(isNaN(v))return;
+  await saveT({scoring:{...S.t.scoring,[field]:v}});
+}
+async function toggleCrit(key){
+  const c=critOf(S.t);
+  const next=c.includes(key)?c.filter(k=>k!==key):[...c,key];
+  if(!next.length){ alert('최소 1개의 순위 기준이 필요합니다.'); return; }
+  await saveT({tiebreaks:next});
+}
+async function moveCrit(key,dir){
+  const a=critOf(S.t); const i=a.indexOf(key), j=i+dir;
+  if(i<0||j<0||j>=a.length)return;
+  [a[i],a[j]]=[a[j],a[i]];
+  await saveT({tiebreaks:a});
+}
+async function saveBasic(){
+  const name=$('t-name').value.trim()||S.t.name;
+  const rt=Math.max(1,parseInt($('t-rounds').value)||S.t.roundsTotal);
+  const jp=$('t-jpin').value.trim();
+  if(!jp){ alert('심판 PIN은 비워둘 수 없습니다.'); return; }
+  await saveT({name, roundsTotal:rt, judgePin:jp});
+  $('basic-ok').textContent='저장되었습니다'; setTimeout(()=>{ const el=$('basic-ok'); if(el)el.textContent=''; },2000);
+}
+
+/* ══════════════ 엑셀 내보내기 (스위스매니저 연계용) ══════════════ */
+function dl(wb, fname){ XLSX.writeFile(wb, fname); }
+const pName=id=>(S.t.players||[]).find(p=>p.id===id)?.name||'?';
+const pRating=id=>(S.t.players||[]).find(p=>p.id===id)?.rating||0;
+
+function exportPlayers(){
+  const t=S.t;
+  // 스위스매니저 엑셀 가져오기용: 이름/레이팅 중심 단순 표
+  const rows=[['No','Name','Rating','Club/City'],
+    ...(t.players||[]).map((p,i)=>[i+1, p.name, p.rating||'', ''])];
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:5},{wch:20},{wch:8},{wch:14}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '선수명단');
+  dl(wb, `${t.name}_선수명단.xlsx`);
+}
+function exportResults(){
+  const t=S.t;
+  const wb=XLSX.utils.book_new();
+  (t.rounds||[]).forEach(rd=>{
+    const rows=[['보드','백 (White)','레이팅','결과','흑 (Black)','레이팅']];
+    rd.pairings.forEach(pr=>{
+      const res=getResult(rd.number,pr);
+      if(pr.blackId===null){ rows.push([pr.board, pName(pr.whiteId), pRating(pr.whiteId)||'', '부전승', '', '']); return; }
+      const disp=res==='1-0'?'1 - 0':res==='0-1'?'0 - 1':res==='1/2'?'½ - ½':'미입력';
+      rows.push([pr.board, pName(pr.whiteId), pRating(pr.whiteId)||'', disp, pName(pr.blackId), pRating(pr.blackId)||'']);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols']=[{wch:5},{wch:18},{wch:8},{wch:9},{wch:18},{wch:8}];
+    XLSX.utils.book_append_sheet(wb, ws, `${rd.number}라운드`);
+  });
+  if(!(t.rounds||[]).length){ alert('아직 진행된 라운드가 없습니다.'); return; }
+  dl(wb, `${t.name}_라운드별결과.xlsx`);
+}
+function exportStandings(){
+  const t=S.t;
+  const {list, tb, criteria}=rankPlayers(t);
+  const cols=criteria.filter(k=>k!=='direct'&&k!=='score');
+  const lbl={buchholz:'Buchholz', buchholzCut1:'Buchholz-1', sonneborn:'Sonneborn-Berger', wins:'Wins', blacks:'Blacks'};
+  const rows=[['순위','이름','레이팅','승점',...cols.map(k=>lbl[k])],
+    ...list.map((s,i)=>[i+1, s.player.name, s.player.rating||'', s.score, ...cols.map(k=>tb[s.player.id]?.[k]??'')])];
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:5},{wch:18},{wch:8},{wch:7},...cols.map(()=>({wch:14}))];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '최종순위');
+  dl(wb, `${t.name}_최종순위.xlsx`);
+}
+
+function exportPenalties(){
+  const t=S.t;
+  const rounds=t.rounds||[];
+  const wb=XLSX.utils.book_new();
+
+  /* 시트1: 라운드 × 선수 요약 */
+  const head=['이름',...rounds.map(rd=>`${rd.number}R 경고`),...rounds.map(rd=>`${rd.number}R 반칙`),'경고 누적','반칙 누적'];
+  const body=(t.players||[]).map(p=>{
+    const tot=penTotal(p.id);
+    return [p.name,
+      ...rounds.map(rd=>getPen(rd.number,p.id).warn||''),
+      ...rounds.map(rd=>getPen(rd.number,p.id).foul||''),
+      tot.warn||'', tot.foul||''];
+  }).filter(r=>r.slice(1).some(v=>v!==''));
+  const ws1=XLSX.utils.aoa_to_sheet([head, ...(body.length?body:[['기록 없음']])]);
+  ws1['!cols']=[{wch:16},...head.slice(1).map(()=>({wch:9}))];
+  XLSX.utils.book_append_sheet(wb, ws1, '경고반칙 요약');
+
+  /* 시트2: 상세 이력 (사유 메모 포함) */
+  const det=[['라운드','선수','경고','반칙','사유 메모','기록 시각']];
+  rounds.forEach(rd=>{
+    (t.players||[]).forEach(p=>{
+      const d=S.penalties[penKey(rd.number,p.id)];
+      if(!d||(!d.warn&&!d.foul&&!d.memo))return;
+      det.push([rd.number, p.name, d.warn||0, d.foul||0, d.memo||'',
+        d.at?new Date(d.at).toLocaleString('ko-KR'):'']);
+    });
+  });
+  const ws2=XLSX.utils.aoa_to_sheet(det.length>1?det:[det[0],['기록 없음']]);
+  ws2['!cols']=[{wch:8},{wch:16},{wch:7},{wch:7},{wch:40},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws2, '상세 이력');
+
+  dl(wb, `${t.name}_경고반칙기록.xlsx`);
+}
+
+/* ══════════════ 렌더링 ══════════════ */
+function render(){
+  const app=$('app'), hr=$('header-right');
+  if(!configOk){
+    app.innerHTML=`<div class="card"><div class="stitle">설정이 필요합니다</div>
+      <div class="hint">이 파일 상단의 <b>설정 구역</b>에 Firebase 콘솔에서 복사한 firebaseConfig 값을 붙여넣은 뒤 다시 열어주세요. 함께 드린 안내서(설정 가이드)를 따라 하시면 됩니다.</div></div>`;
+    hr.innerHTML=''; return;
+  }
+  // 헤더 우측
+  let h='';
+  if(S.user){
+    if(S.screen==='tour'||S.screen==='pin') h+=`<button class="btn-g btn-sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="leaveTour()">대회 목록</button> `;
+    h+=`<button class="btn-g btn-sm" style="color:#fff;border-color:rgba(255,255,255,.5)" onclick="logout()">나가기</button>`;
+  }
+  hr.innerHTML=h;
+
+  if(S.screen==='role') return renderRole(app);
+  if(S.screen==='list') return renderList(app);
+  if(S.screen==='pin') return renderPin(app);
+  if(S.screen==='tour') return renderTour(app);
+}
+
+function renderRole(app){
+  app.innerHTML=`
+  <div class="center-box">
+    <div class="card">
+      <div style="text-align:center;margin-bottom:16px">
+        <div style="font-size:26px">♔</div>
+        <div style="font-size:17px;font-weight:800;margin-top:4px">대회 시스템 입장</div>
+      </div>
+      <h3 class="sub">심판장 (전체 운영)</h3>
+      <div class="row" style="margin-bottom:6px">
+        <input id="chief-email" class="grow" type="email" placeholder="심판장 이메일" autocomplete="username">
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <input id="chief-pw" class="grow" type="password" placeholder="비밀번호" autocomplete="current-password"
+          onkeydown="if(event.key==='Enter')chiefLogin()">
+      </div>
+      <button class="btn-p" style="width:100%" onclick="chiefLogin()">심판장 로그인</button>
+      <div style="border-top:1px solid var(--line);margin:18px 0"></div>
+      <h3 class="sub">심판 (결과 입력)</h3>
+      <div class="hint">대회 목록에서 대회를 선택한 뒤 심판 PIN을 입력합니다.</div>
+      <button class="btn-g" style="width:100%" onclick="judgeLogin()">심판으로 입장</button>
+      <div class="err" id="role-err"></div>
+    </div>
+  </div>`;
+}
+
+function renderList(app){
+  const items=S.tournaments.map(x=>`
+    <div class="list-item">
+      <div>
+        <div style="font-weight:700;font-size:15px">${esc(x.name)}</div>
+        <div class="muted" style="font-size:12px">${new Date(x.createdAt).toLocaleString('ko-KR')} · ${(x.players||[]).length}명 · ${(x.rounds||[]).length}/${x.roundsTotal}R</div>
+      </div>
+      <div class="row">
+        <button class="btn-p btn-sm" onclick="openTour('${x.id}')">열기</button>
+        ${S.isChief?`<button class="btn-d btn-sm" onclick="delTour('${x.id}')">삭제</button>`:''}
+      </div>
+    </div>`).join('');
+  app.innerHTML=`
+    ${S.isChief?`
+    <div class="card">
+      <div class="stitle">새 대회 만들기</div>
+      <div class="row">
+        <input id="new-name" class="grow" placeholder="예: 2026 김포시장배 청소년 체스대회" onkeydown="if(event.key==='Enter')createTour()">
+        <button class="btn-p" onclick="createTour()">만들기</button>
+      </div>
+    </div>`:''}
+    <div class="card">
+      <div class="stitle">대회 목록 <span class="badge ${S.isChief?'chief':'judge'}">${S.isChief?'심판장':'심판'}</span></div>
+      ${items||'<div class="muted">아직 대회가 없습니다.</div>'}
+    </div>`;
+}
+
+function renderPin(app){
+  if(!S.t){ app.innerHTML='<div class="card"><div class="muted">대회를 불러오는 중…</div></div>'; return; }
+  app.innerHTML=`
+  <div class="center-box">
+    <div class="card">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:24px">♔</div>
+        <div style="font-size:17px;font-weight:800;margin-top:4px">${esc(S.t.name)}</div>
+        <div class="muted">심판 PIN을 입력하세요</div>
+      </div>
+      <input id="judge-pin" class="pin-input" type="password" inputmode="numeric" placeholder="심판 PIN"
+        onkeydown="if(event.key==='Enter')tryJudgePin()" autofocus>
+      <div class="err" id="pin-err"></div>
+      <button class="btn-p" style="width:100%;margin-top:8px" onclick="tryJudgePin()">입장</button>
+      <div class="muted" style="text-align:center;margin-top:12px;font-size:12px">
+        심판은 결과 입력과 순위표만 사용할 수 있습니다.
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderTour(app){
+  const t=S.t;
+  if(!t){ app.innerHTML='<div class="card"><div class="muted">불러오는 중…</div></div>'; return; }
+  const isChief=S.isChief;
+  if(!isChief && !S.judgeOk){ S.screen='pin'; return renderPin(app); }
+  if(!isChief && (S.tab==='settings'||S.tab==='players'||S.tab==='export')) S.tab='rounds';
+
+  const tabs=[
+    ...(isChief?[['settings','⚙ 설정'],['players','👥 선수']]:[]),
+    ['rounds','⚔ 라운드·결과'],['penalties','⚠ 경고·반칙 기록'],['standings','🏆 순위표'],
+    ...(isChief?[['export','⬇ 내보내기']]:[]),
+  ];
+  const tabHtml=tabs.map(([k,l])=>`<button class="tab ${S.tab===k?'on':''}" onclick="S.tab='${k}';render()">${l}</button>`).join('');
+
+  let body='';
+  if(S.tab==='settings') body=viewSettings(t);
+  else if(S.tab==='players') body=viewPlayers(t);
+  else if(S.tab==='rounds') body=viewRounds(t, isChief);
+  else if(S.tab==='penalties') body=viewPenalties(t, isChief);
+  else if(S.tab==='standings') body=viewStandings(t);
+  else if(S.tab==='export') body=viewExport(t);
+
+  app.innerHTML=`
+    <div style="margin-bottom:14px">
+      <div class="row" style="gap:10px">
+        <span style="font-size:19px;font-weight:800">${esc(t.name)}</span>
+        <span class="badge ${isChief?'chief':'judge'}">${isChief?'심판장':'심판'}</span>
+      </div>
+      <div class="muted">총 ${t.roundsTotal}R · 진행 ${(t.rounds||[]).length}R · 선수 ${(t.players||[]).length}명 · 승점 ${fmt(t.scoring.win)}/${fmt(t.scoring.draw)}/${fmt(t.scoring.loss)} (부전 ${fmt(t.scoring.bye)})</div>
+    </div>
+    <div class="tabs">${tabHtml}</div>
+    ${body}`;
+}
+
+function viewSettings(t){
+  const c=critOf(t);
+  const presets=SCORING_PRESETS.map((p,i)=>{
+    const on=p.win===t.scoring.win&&p.draw===t.scoring.draw&&p.loss===t.scoring.loss&&p.bye===t.scoring.bye;
+    return `<button class="pill ${on?'on':''}" onclick="applyPreset(${i})">${p.label}</button>`;
+  }).join('');
+  const scInputs=[['win','승'],['draw','무'],['loss','패'],['bye','부전승']].map(([f,l])=>`
+    <label class="fld" style="text-align:center">${l}
+      <input id="sc-${f}" class="num" type="number" step="0.5" value="${t.scoring[f]}" onchange="setScoring('${f}')">
+    </label>`).join('');
+  const critOn=c.map((k,i)=>{
+    const d=TIEBREAK_DEFS.find(x=>x.key===k);
+    return `<div class="crit-item">
+      <div style="font-size:14px"><b style="color:var(--green);margin-right:8px">${i+1}</b>✓ ${d?d.label:k}</div>
+      <div class="row" style="gap:4px">
+        <button class="btn-g btn-sm" onclick="moveCrit('${k}',-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="btn-g btn-sm" onclick="moveCrit('${k}',1)" ${i===c.length-1?'disabled':''}>↓</button>
+        <button class="btn-d btn-sm" onclick="toggleCrit('${k}')">제외</button>
+      </div>
+    </div>`;
+  }).join('');
+  const critOff=TIEBREAK_DEFS.filter(d=>!c.includes(d.key)).map(d=>
+    `<button class="crit-off" onclick="toggleCrit('${d.key}')">○ ${d.label} — 클릭해서 추가</button>`).join('');
+  return `
+    <div class="card">
+      <div class="stitle">대회 정보 · 심판 PIN</div>
+      <label class="fld" style="margin-bottom:10px">대회명<input id="t-name" value="${esc(t.name)}"></label>
+      <div class="row" style="align-items:flex-end">
+        <label class="fld">총 라운드<input id="t-rounds" class="num" type="number" value="${t.roundsTotal}"></label>
+        <label class="fld">심판 PIN<input id="t-jpin" style="width:120px;text-align:center" value="${esc(t.judgePin)}"></label>
+        <button class="btn-p" onclick="saveBasic()">저장</button>
+        <span class="ok" id="basic-ok"></span>
+      </div>
+      <div class="hint" style="margin-top:8px">심판장 계정(이메일·비밀번호)은 Firebase 콘솔에서 관리되며, 이 화면·데이터 어디에도 저장되지 않습니다. 설정 변경은 서버 규칙상 심판장 계정만 가능합니다.</div>
+    </div>
+    <div class="card gold">
+      <div class="stitle">승점 기준 <span class="muted" style="color:var(--gold)">· 대회마다 다르게 설정</span></div>
+      <div class="hint">순위표와 부흐홀츠·손네본-베르거 계산이 모두 이 기준을 따릅니다.${(t.rounds||[]).length?' <span style="color:var(--red)">라운드 시작 후 변경 시 기존 결과도 재계산됩니다.</span>':''}</div>
+      <div class="row" style="margin-bottom:12px">${presets}</div>
+      <div class="row" style="gap:16px">${scInputs}</div>
+    </div>
+    <div class="card green">
+      <div class="stitle">순위 결정 기준 <span class="muted" style="color:var(--green)">· 적용 순서대로</span></div>
+      <div class="hint">위에서부터 순서대로 적용해 순위를 가립니다. 모든 기준이 동률이면 레이팅 순.</div>
+      ${critOn}${critOff}
+    </div>`;
+}
+
+function viewPlayers(t){
+  const started=(t.rounds||[]).length>0;
+  const rows=(t.players||[]).map((p,i)=>`
+    <div class="list-item" style="opacity:${p.active===false?.45:1}">
+      <div style="font-size:14px"><b>${esc(p.name)}</b> <span class="muted">${p.rating?'R'+p.rating:'무레이팅'}</span>
+        ${p.active===false?'<span style="color:var(--red);font-size:12px"> 기권</span>':''}</div>
+      ${started
+        ?`<button class="btn-g btn-sm" onclick="togglePlayer('${p.id}')">${p.active===false?'복귀':'기권 처리'}</button>`
+        :`<button class="btn-d btn-sm" onclick="removePlayer('${p.id}')">삭제</button>`}
+    </div>`).join('');
+  return `
+    <div class="card">
+      <div class="stitle">선수 등록 (${(t.players||[]).length}명)</div>
+      <div class="row" style="margin-bottom:12px">
+        <input id="p-name" class="grow" placeholder="선수 이름" onkeydown="if(event.key==='Enter')addPlayer()">
+        <input id="p-rating" style="width:120px" type="number" placeholder="레이팅(선택)" onkeydown="if(event.key==='Enter')addPlayer()">
+        <button class="btn-p" onclick="addPlayer()">추가</button>
+      </div>
+      ${rows||'<div class="muted">선수를 추가하세요. 대회 시작 후에는 삭제 대신 기권 처리를 사용합니다.</div>'}
+    </div>`;
+}
+
+function viewRounds(t, isChief){
+  const rounds=t.rounds||[];
+  const currentDone=!rounds.length || rounds[rounds.length-1].pairings.every(pr=>getResult(rounds.length,pr)!==null);
+  const canNext=currentDone && rounds.length<t.roundsTotal;
+  const top=`
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div style="font-size:14px">진행: <b>${rounds.length}</b> / ${t.roundsTotal} 라운드
+          ${!currentDone?'<span style="color:var(--gold);margin-left:6px">결과 입력 중</span>':''}</div>
+        ${isChief
+          ?`<button class="btn-gold" onclick="startNextRound()" ${canNext?'':'disabled'}>⇄ ${rounds.length===0?'1라운드':(rounds.length+1)+'라운드'} 페어링 생성</button>`
+          :'<span class="muted">페어링 생성은 심판장이 진행합니다</span>'}
+      </div>
+    </div>`;
+  const cards=rounds.map(rd=>{
+    const done=rd.pairings.filter(pr=>getResult(rd.number,pr)!==null).length;
+    const boards=rd.pairings.map(pr=>{
+      const res=getResult(rd.number,pr);
+      if(pr.blackId===null){
+        return `<div class="board done"><div style="font-size:14px">
+          <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
+          <b>${esc(pName(pr.whiteId))}</b> <span style="color:var(--gold);font-weight:700">부전승 (+${fmt(t.scoring.bye)})</span></div></div>`;
+      }
+      const btn=(val,label)=>`<button class="rbtn ${res===val?'on':''}"
+        onclick="setResult(${rd.number},${pr.board},${res===val?'null':`'${val}'`})">${label}</button>`;
+      const penBox=(pid,label)=>{
+        const p=getPen(rd.number,pid);
+        const ctr=(f,ico,txt,color)=>`
+          <span class="pen-ctr">
+            <span class="pen-lbl" style="color:${color}">${ico} ${txt}</span>
+            <button class="pen-btn" onclick="bumpPen(${rd.number},'${pid}','${f}',-1)" ${p[f]?'':'disabled'}>−</button>
+            <b class="pen-num ${p[f]?'hot':''}">${p[f]}</b>
+            <button class="pen-btn" onclick="bumpPen(${rd.number},'${pid}','${f}',1)">＋</button>
+          </span>`;
+        return `<div class="pen-row">
+          <span class="pen-name">${label} ${esc(pName(pid))}</span>
+          ${ctr('warn','⚠','경고','var(--gold)')}
+          ${ctr('foul','⛔','반칙','var(--red)')}
+        </div>`;
+      };
+      return `<div class="board ${res?'done':''}">
+        <div style="font-size:14px">
+          <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
+          <span class="wtag">백</span> <b>${esc(pName(pr.whiteId))}</b>
+          <span style="color:#aaa;margin:0 6px">vs</span>
+          <span class="btag">흑</span> <b>${esc(pName(pr.blackId))}</b>
+        </div>
+        <div class="row" style="gap:4px">${btn('1-0','백 승')}${btn('1/2','무')}${btn('0-1','흑 승')}</div>
+        <div class="pen-wrap">
+          ${penBox(pr.whiteId,'백')}
+          ${penBox(pr.blackId,'흑')}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="card">
+      <div class="stitle">⚔ ${rd.number}라운드 <span class="muted">(${done}/${rd.pairings.length} 입력)</span></div>
+      ${boards}</div>`;
+  }).reverse().join('');
+  return top + (cards || '<div class="card"><div class="muted">선수 등록 후 페어링을 생성하면 라운드가 시작됩니다.</div></div>');
+}
+
+function viewPenalties(t, isChief){
+  const rounds=t.rounds||[];
+  if(!rounds.length){
+    return `<div class="card"><div class="stitle">⚠ 경고·반칙 기록</div>
+      <div class="muted">라운드가 시작되면 기록할 수 있습니다. 경고·반칙은 「라운드·결과」 탭의 각 대국 카드에서 ＋ 버튼으로 입력합니다.</div></div>`;
+  }
+  const cur=S.penRound===null?rounds.length:S.penRound;
+
+  /* 라운드 선택 버튼 */
+  const rbtns=rounds.map(rd=>{
+    const cnt=(t.players||[]).reduce((a,p)=>{const x=getPen(rd.number,p.id); return a+x.warn+x.foul;},0);
+    return `<button class="tab ${cur===rd.number?'on':''}" onclick="setPenRound('${rd.number}')">
+      ${rd.number}R${cnt?` <span class="pen-tag f">${cnt}</span>`:''}</button>`;
+  }).join('');
+
+  /* 선택 라운드의 기록 */
+  const rows=(t.players||[]).map(p=>{
+    const x=getPen(cur,p.id);
+    if(!x.warn && !x.foul && !x.memo) return '';
+    return `<tr>
+      <td style="font-weight:700">${esc(p.name)}</td>
+      <td style="text-align:center;color:${x.warn?'var(--gold)':'#ccc'};font-weight:800">${x.warn}</td>
+      <td style="text-align:center;color:${x.foul?'var(--red)':'#ccc'};font-weight:800">${x.foul}</td>
+      <td>${isChief
+        ? `<input class="pen-memo" value="${esc(x.memo)}" placeholder="사유 메모 (예: 3R B5 터치무브)"
+             onchange="savePenMemo(${cur},'${p.id}',this.value)">`
+        : `<span class="muted">${esc(x.memo)||'-'}</span>`}</td>
+    </tr>`;
+  }).filter(Boolean).join('');
+
+  /* 대회 전체 누적 */
+  const totals=(t.players||[]).map(p=>({p, ...penTotal(p.id)}))
+    .filter(x=>x.warn||x.foul)
+    .sort((a,b)=>(b.warn+b.foul)-(a.warn+a.foul));
+  const totalRows=totals.map(x=>{
+    const per=rounds.map(rd=>{
+      const y=getPen(rd.number,x.p.id);
+      if(!y.warn && !y.foul) return '';
+      return `${rd.number}R(${y.warn?'⚠'+y.warn:''}${y.warn&&y.foul?' ':''}${y.foul?'⛔'+y.foul:''})`;
+    }).filter(Boolean).join(' · ');
+    return `<tr>
+      <td style="font-weight:700">${esc(x.p.name)}</td>
+      <td style="text-align:center;color:var(--gold);font-weight:800">${x.warn}</td>
+      <td style="text-align:center;color:var(--red);font-weight:800">${x.foul}</td>
+      <td class="muted" style="font-size:12.5px">${per}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="card">
+    <div class="stitle">⚠ 라운드별 경고·반칙</div>
+    <div class="hint">입력은 「라운드·결과」 탭의 각 대국 카드에서 합니다. 카운트는 <b>라운드마다 0부터 새로 시작</b>하며, 지난 라운드 기록은 아래에 그대로 보존되어 항의가 들어올 때 조회할 수 있습니다.</div>
+    <div class="tabs" style="margin-bottom:12px">${rbtns}</div>
+    <div class="overflow"><table>
+      <tr><th>선수</th><th style="text-align:center">⚠ 경고</th><th style="text-align:center">⛔ 반칙</th><th>사유 메모</th></tr>
+      ${rows||`<tr><td colspan="4" class="muted" style="padding:16px">${cur}라운드에 기록된 경고·반칙이 없습니다.</td></tr>`}
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="stitle">📋 대회 전체 누적 <span class="muted">항의 대응·심판장 판단용</span></div>
+    <div class="overflow"><table>
+      <tr><th>선수</th><th style="text-align:center">⚠ 누적</th><th style="text-align:center">⛔ 누적</th><th>라운드별 상세</th></tr>
+      ${totalRows||'<tr><td colspan="4" class="muted" style="padding:16px">아직 기록된 경고·반칙이 없습니다.</td></tr>'}
+    </table></div>
+    <div class="hint" style="margin-top:10px">자동 실격·몰수 처리는 하지 않습니다. 누적 기록을 근거로 심판장이 판단하여, 필요 시 「선수」 탭의 기권 처리나 해당 대국 결과 수정으로 반영하세요.</div>
+  </div>`;
+}
+
+function viewStandings(t){
+  const {list, tb, criteria}=rankPlayers(t);
+  const cols=criteria.filter(k=>k!=='direct'&&k!=='score');
+  const lbl={buchholz:'Buch', buchholzCut1:'Buch-1', sonneborn:'SB', wins:'Wins', blacks:'흑번'};
+  const head=`<tr><th>순위</th><th>선수</th><th>레이팅</th><th style="color:var(--green)">승점</th>${cols.map(k=>`<th class="muted">${lbl[k]}</th>`).join('')}</tr>`;
+  const rows=list.map((s,i)=>`
+    <tr class="${i<3?'top3':''}" style="opacity:${s.player.active===false?.5:1}">
+      <td class="rank">${i+1}</td>
+      <td style="font-weight:700">${esc(s.player.name)}${s.player.active===false?' <span style="color:var(--red);font-size:12px">기권</span>':''}</td>
+      <td class="muted">${s.player.rating||'-'}</td>
+      <td class="score">${fmt(s.score)}</td>
+      ${cols.map(k=>`<td class="muted">${fmt(tb[s.player.id]?.[k])}</td>`).join('')}
+    </tr>`).join('');
+  const order=criteria.map((k,i)=>`${i+1}. ${TIEBREAK_DEFS.find(d=>d.key===k)?.label||k}`).join('  →  ');
+  return `<div class="card">
+    <div class="stitle">🏆 순위표 <span class="muted">승점 ${fmt(t.scoring.win)}·${fmt(t.scoring.draw)}·${fmt(t.scoring.loss)} 적용</span></div>
+    <div class="overflow"><table>${head}${rows||'<tr><td colspan="9" class="muted" style="padding:16px">결과가 입력되면 순위가 계산됩니다.</td></tr>'}</table></div>
+    <div class="muted" style="font-size:12px;margin-top:10px">순위 결정 순서: ${order} → 동률 시 레이팅</div>
+  </div>`;
+}
+
+function viewExport(t){
+  return `<div class="card">
+    <div class="stitle">⬇ 내보내기 (스위스매니저 · 체스리절트 연계)</div>
+    <div class="hint">체스리절트(chess-results.com) 게시는 스위스매니저 정품을 통해서만 가능합니다. 아래 파일을 내려받아 스위스매니저에 옮겨 입력한 뒤 업로드하세요. 선수 명단은 스위스매니저의 엑셀 가져오기로 바로 불러올 수 있습니다.</div>
+    <div class="row" style="gap:10px">
+      <button class="btn-p" onclick="exportPlayers()">📋 선수 명단 (.xlsx)</button>
+      <button class="btn-p" onclick="exportResults()">⚔ 라운드별 결과 (.xlsx)</button>
+      <button class="btn-p" onclick="exportStandings()">🏆 최종 순위표 (.xlsx)</button>
+      <button class="btn-p" onclick="exportPenalties()">⚠ 경고·반칙 기록 (.xlsx)</button>
+    </div>
+    <div class="hint" style="margin-top:12px">
+      · 선수 명단: No / Name / Rating 열 — 스위스매니저 선수 입력용<br>
+      · 라운드별 결과: 라운드마다 시트 1장, 보드 순서대로 백·결과·흑 — 옮겨 입력용<br>
+      · 최종 순위표: 이 대회의 승점·타이브레이크 기준이 그대로 반영된 공식 결과 보관용<br>
+      · 경고·반칙 기록: 라운드별 요약 + 사유 메모·기록 시각이 담긴 상세 이력 — 항의 대응 근거자료
+    </div>
+  </div>`;
+}
+
+render();
+</script>
+</body>
+</html>
