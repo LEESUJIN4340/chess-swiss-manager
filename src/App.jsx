@@ -248,7 +248,10 @@ export default function App(){
             <span className="font-bold text-base">{tournament.name}</span>
             <Badge color={role==='chief'?'amber':'blue'}>{role==='chief'?'심판장':'심판'}</Badge>
           </div>
-          <button onClick={()=>setRole(null)} className="text-slate-400 hover:text-white"><LogOut size={18}/></button>
+          <div className="flex items-center gap-2">
+            <button onClick={()=>setRole(null)} title="로그아웃" className="text-slate-400 hover:text-white"><LogOut size={18}/></button>
+            <button onClick={()=>{setTid(null);setTournament(null);setRole(null)}} title="대회 목록" className="text-slate-400 hover:text-white text-xs border border-slate-600 rounded px-2 py-1">대회목록</button>
+          </div>
         </div>
         <p className="text-slate-400 text-xs mt-0.5 max-w-2xl mx-auto font-mono">
           {numRounds}라운드 · 선수 {players.length}명 · 그룹 {effectiveGroups.length}개
