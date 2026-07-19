@@ -550,7 +550,7 @@ function SettingsTab({tid,tournament,players,onUpdate,showToast}){
   const importCsv=async(text)=>{
     const r=Papa.parse(text.trim(),{header:true,skipEmptyLines:true})
     const rows=r.data; let added=0
-    const SYNONYMS={name:['이름','성명','참가자','참가선수','선수','name'],phone:['전화번호','연락처','휴대폰','phone'],gender:['남여구분','남녀구분','성별','gender'],group:['학년','그룹','조','group'],rating:['레이팅','rating','등급','점수']}
+    const SYNONYMS={name:['이름','성명','참가자','참가선수','선수','참가선수이름','name'],phone:['전화번호','연락처','휴대폰','phone','참가선수연락처','핸드폰'],gender:['남여구분','남녀구분','성별','gender'],group:['학년','그룹','조','group','나이','부문'],rating:['레이팅','rating','등급','점수']}
     const find=(rowObj,field)=>{
       const keys=Object.keys(rowObj)
       const syn=SYNONYMS[field]||[]
@@ -628,8 +628,23 @@ function SettingsTab({tid,tournament,players,onUpdate,showToast}){
         </div>
         {showImport&&(
           <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 space-y-2">
-            <p className="text-xs text-slate-600">이름·전화번호·남여구분·학년 컬럼의 CSV를 붙여넣으세요. 학년 값은 자동 정규화됩니다.</p>
-            <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder={'이름,전화번호,남여구분,학년\n홍길동,010-1234-5678,남,초등부 3학년'} className="w-full h-24 border rounded-lg px-2 py-1.5 text-xs font-mono"/>
+            <p className="text-xs text-slate-600">CSV 파일을 업로드하거나 내용을 직접 붙여넣으세요. 헤더명은 자동 인식됩니다.</p>
+            <label className="flex items-center gap-2 cursor-pointer bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50">
+              <Upload size={14} className="text-amber-600"/>
+              <span className="text-slate-600">CSV 파일 선택</span>
+              <input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>{
+                const file=e.target.files?.[0]; if(!file) return
+                const reader=new FileReader()
+                reader.onload=ev=>{
+                  try { setImportText(new TextDecoder('utf-8',{fatal:true}).decode(ev.target.result).replace(/^\uFEFF/,'')) }
+                  catch { setImportText(new TextDecoder('euc-kr').decode(ev.target.result)) }
+                }
+                reader.readAsArrayBuffer(file)
+                e.target.value=''
+              }}/>
+            </label>
+            <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder={'또는 여기에 직접 붙여넣기\n이름,전화번호,남여구분,학년\n홍길동,010-1234-5678,남,초등부 3학년'} className="w-full h-24 border rounded-lg px-2 py-1.5 text-xs font-mono"/>
+            {importText.trim()&&<p className="text-xs text-emerald-600">{importText.trim().split('\n').length}줄 인식됨</p>}
             <div className="flex gap-2 justify-end">
               <Btn variant="ghost" size="sm" onClick={()=>{setShowImport(false);setImportText('')}}>닫기</Btn>
               <Btn size="sm" onClick={()=>importCsv(importText)} disabled={!importText.trim()||busy}>가져오기</Btn>
