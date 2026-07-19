@@ -65,6 +65,8 @@
   .pen-tag{display:inline-block; font-size:11px; font-weight:700; padding:1px 6px; border-radius:8px; margin-left:4px;}
   .pen-tag.w{background:var(--gold-soft); color:var(--gold);}
   .pen-tag.f{background:#F7E4E1; color:var(--red);}
+  .board.notmine{opacity:.5; background:#F2F3F0;}
+  .board.notmine .rbtn, .board.notmine .pen-btn{cursor:not-allowed;}
   .wtag{background:#fff; border:1px solid var(--line); border-radius:4px; padding:1px 6px; font-size:12px;}
   .btag{background:var(--ink); color:#fff; border-radius:4px; padding:1px 6px; font-size:12px;}
   table{width:100%; border-collapse:collapse; font-size:14px;}
@@ -133,7 +135,7 @@ const S={
   user:null, isChief:false,
   screen:'role',        // role | list | pin | tour
   tournaments:[], tid:null, t:null, results:{}, penalties:{},
-  tab:'rounds', judgeOk:false, penRound:null, editPid:null,
+  tab:'rounds', judgeOk:false, penRound:null, editPid:null, judgeId:null, progGroup:'', progPid:'',
   unsubT:null, unsubR:null, unsubP:null, unsubList:null,
 };
 const $=id=>document.getElementById(id);
@@ -205,6 +207,40 @@ function computeTB(t, st){
     tb[s.player.id]={buchholz:buch, buchholzCut1:cut1, sonneborn:sb, wins:s.wins, blacks:s.blacks};
   });
   return tb;
+}
+/* 라운드별 누적 점수·순위 추이 계산 */
+function roundProgress(t){
+  const rounds=t.rounds||[];
+  const prog={};   // pid → [{round, gained, cum, rank, opp, res}]
+  (t.players||[]).forEach(p=>{ prog[p.id]=[]; });
+  for(let n=1;n<=rounds.length;n++){
+    /* n라운드까지만 반영한 가상 대회로 순위 산출 */
+    const partial={...t, rounds:rounds.filter(r=>r.number<=n)};
+    const {list}=rankPlayers(partial);
+    const rankOf={}; list.forEach((s,i)=>{ rankOf[s.player.id]=i+1; });
+    const scoreOf={}; list.forEach(s=>{ scoreOf[s.player.id]=s.score; });
+    const rd=rounds.find(r=>r.number===n);
+    (t.players||[]).forEach(p=>{
+      const prev=prog[p.id].length?prog[p.id][prog[p.id].length-1].cum:0;
+      const cum=scoreOf[p.id]??0;
+      let opp='', res='', gained=cum-prev;
+      if(rd){
+        const pr=rd.pairings.find(x=>x.whiteId===p.id||x.blackId===p.id);
+        if(pr){
+          const r=getResult(n,pr);
+          if(pr.blackId===null){ opp='부전승'; res=r==='bye'?'BYE':''; }
+          else{
+            const isW=pr.whiteId===p.id;
+            opp=pName(isW?pr.blackId:pr.whiteId)+(isW?' (백)':' (흑)');
+            if(r==='1/2')res='무';
+            else if(r) res=((r==='1-0')===isW)?'승':'패';
+          }
+        }
+      }
+      prog[p.id].push({round:n, gained, cum, rank:rankOf[p.id]||0, opp, res});
+    });
+  }
+  return prog;
 }
 function rankPlayers(t){
   const st=buildStats(t), tb=computeTB(t,st), list=Object.values(st), criteria=critOf(t);
@@ -293,7 +329,7 @@ function listenTour(tid){
 }
 function leaveTour(){
   if(S.unsubT)S.unsubT(); if(S.unsubR)S.unsubR(); if(S.unsubP)S.unsubP();
-  S.tid=null; S.t=null; S.results={}; S.penalties={}; S.judgeOk=false; S.screen='list'; render();
+  S.tid=null; S.t=null; S.results={}; S.penalties={}; S.judgeOk=false; S.judgeId=null; S.screen='list'; render();
 }
 
 /* ══════════════ 인증 ══════════════ */
@@ -331,7 +367,7 @@ async function createTour(){
   openTour(ref.id);
 }
 function openTour(tid){
-  S.tid=tid; S.judgeOk=false; S.tab='rounds';
+  S.tid=tid; S.judgeOk=false; S.judgeId=null; S.tab='rounds';
   listenTour(tid);
   S.screen=S.isChief?'tour':'pin';
   render();
@@ -344,11 +380,73 @@ async function delTour(tid){
   batch.delete(col().doc(tid));
   await batch.commit();
 }
+/* ══════════════ 심판 배정 ══════════════ */
+/* judges: [{id,name,groups:[부문...],boardFrom:n,boardTo:n}] */
+function judgeList(){ return (S.t && S.t.judges)||[]; }
+function curJudge(){ return judgeList().find(j=>j.id===S.judgeId)||null; }
+/* 이 심판이 해당 보드를 담당하는가 */
+function canEditBoard(pr, rd){
+  if(S.isChief) return true;              // 심판장은 전부 가능
+  const j=curJudge();
+  if(!j) return true;                     // 배정 미사용 시 전원 가능
+  const hasGroup=(j.groups||[]).length>0;
+  const hasBoard=j.boardFrom||j.boardTo;
+  if(!hasGroup && !hasBoard) return true; // 담당 미지정이면 전체 허용
+  if(hasBoard){
+    const f=j.boardFrom||1, t=j.boardTo||9999;
+    if(pr.board>=f && pr.board<=t) return true;
+  }
+  if(hasGroup){
+    const g=[pr.whiteId,pr.blackId].filter(Boolean)
+      .map(id=>{ const p=(S.t.players||[]).find(x=>x.id===id); return p?(p.group||''):''; });
+    if(g.some(x=>x && j.groups.includes(x))) return true;
+  }
+  return false;
+}
+function judgeLabel(pr){
+  const arr=judgeList().filter(j=>{
+    const saved=S.judgeId; S.judgeId=j.id;
+    const ok=(()=>{ const chief=S.isChief; S.isChief=false; const r=canEditBoard(pr); S.isChief=chief; return r; })();
+    S.judgeId=saved; return ok;
+  });
+  return arr.length===1?arr[0].name:'';
+}
+async function addJudge(){
+  const n=$('j-name').value.trim(); if(!n)return;
+  const j={id:Math.random().toString(36).slice(2,10), name:n, groups:[], boardFrom:0, boardTo:0};
+  await saveT({judges:[...judgeList(), j]});
+  $('j-name').value=''; $('j-name').focus();
+}
+async function removeJudge(jid){ await saveT({judges:judgeList().filter(j=>j.id!==jid)}); }
+async function toggleJudgeGroup(jid, g){
+  await saveT({judges:judgeList().map(j=>{
+    if(j.id!==jid)return j;
+    const cur=j.groups||[];
+    return {...j, groups:cur.includes(g)?cur.filter(x=>x!==g):[...cur,g]};
+  })});
+}
+async function updJudge(jid, field, val){
+  await saveT({judges:judgeList().map(j=>{
+    if(j.id!==jid)return j;
+    if(field==='groups'){
+      const g=String(val).split(',').map(s=>s.trim()).filter(Boolean);
+      return {...j, groups:g};
+    }
+    return {...j, [field]:parseInt(val)||0};
+  })});
+}
+
 function tryJudgePin(){
   const v=$('judge-pin').value;
-  if(S.t && v===S.t.judgePin){ S.judgeOk=true; S.screen='tour'; render(); }
+  if(S.t && v===S.t.judgePin){
+    S.judgeOk=true;
+    /* 심판이 등록되어 있으면 본인 선택 화면으로 */
+    S.screen=judgeList().length?'whoami':'tour';
+    render();
+  }
   else{ $('pin-err').textContent='PIN이 올바르지 않습니다.'; $('judge-pin').value=''; }
 }
+function pickJudge(jid){ S.judgeId=jid; S.screen='tour'; render(); }
 async function setResult(rd, board, result){
   const id=`r${rd}_b${board}`;
   const ref=col().doc(S.tid).collection('results').doc(id);
@@ -698,6 +796,39 @@ function exportStandings(){
   dl(wb, `${t.name}_최종순위.xlsx`);
 }
 
+function exportProgress(){
+  const t=S.t;
+  const rounds=t.rounds||[];
+  if(!rounds.length){ alert('진행된 라운드가 없습니다.'); return; }
+  const prog=roundProgress(t);
+  const {list}=rankPlayers(t);
+  const nums=rounds.map(r=>r.number);
+  const wb=XLSX.utils.book_new();
+  // 시트1: 누적 점수표
+  const h1=['순위','이름','부문',...nums.map(n=>`${n}R 누적`),'최종'];
+  const b1=list.map((s,i)=>[i+1, s.player.name, s.player.group||'',
+    ...nums.map(n=>{ const e=(prog[s.player.id]||[]).find(x=>x.round===n); return e?e.cum:''; }), s.score]);
+  const ws1=XLSX.utils.aoa_to_sheet([h1,...b1]);
+  ws1['!cols']=[{wch:5},{wch:14},{wch:10},...nums.map(()=>({wch:9})),{wch:8}];
+  XLSX.utils.book_append_sheet(wb, ws1, '누적점수');
+  // 시트2: 순위 변동
+  const h2=['이름','부문',...nums.map(n=>`${n}R 순위`)];
+  const b2=list.map(s=>[s.player.name, s.player.group||'',
+    ...nums.map(n=>{ const e=(prog[s.player.id]||[]).find(x=>x.round===n); return e&&e.rank?e.rank:''; })]);
+  const ws2=XLSX.utils.aoa_to_sheet([h2,...b2]);
+  ws2['!cols']=[{wch:14},{wch:10},...nums.map(()=>({wch:9}))];
+  XLSX.utils.book_append_sheet(wb, ws2, '순위변동');
+  // 시트3: 선수별 상세
+  const d=[['이름','라운드','상대','결과','획득','누적','순위']];
+  list.forEach(s=>{ (prog[s.player.id]||[]).forEach(e=>{
+    d.push([s.player.name, e.round, e.opp, e.res||'미입력', e.gained, e.cum, e.rank||'']);
+  }); });
+  const ws3=XLSX.utils.aoa_to_sheet(d);
+  ws3['!cols']=[{wch:14},{wch:8},{wch:20},{wch:8},{wch:8},{wch:8},{wch:8}];
+  XLSX.utils.book_append_sheet(wb, ws3, '선수별상세');
+  dl(wb, `${t.name}_라운드별누적.xlsx`);
+}
+
 function exportPenalties(){
   const t=S.t;
   const rounds=t.rounds||[];
@@ -752,6 +883,7 @@ function render(){
   if(S.screen==='role') return renderRole(app);
   if(S.screen==='list') return renderList(app);
   if(S.screen==='pin') return renderPin(app);
+  if(S.screen==='whoami') return renderWhoami(app);
   if(S.screen==='tour') return renderTour(app);
 }
 
@@ -829,6 +961,34 @@ function renderPin(app){
   </div>`;
 }
 
+function renderWhoami(app){
+  const js=judgeList();
+  const btns=js.map(j=>{
+    const scope=[];
+    if((j.groups||[]).length) scope.push(j.groups.join('·'));
+    if(j.boardFrom||j.boardTo) scope.push(`B${j.boardFrom||1}~${j.boardTo||'끝'}`);
+    return `<button class="btn-g" style="width:100%;margin-bottom:8px;padding:14px;text-align:left" onclick="pickJudge('${j.id}')">
+      <b style="font-size:15px">${esc(j.name)}</b>
+      <span class="muted" style="margin-left:8px;font-size:12px">${scope.length?esc(scope.join(' / ')):'담당 미지정 (전체)'}</span>
+    </button>`;
+  }).join('');
+  app.innerHTML=`
+  <div class="center-box">
+    <div class="card">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:24px">⚖</div>
+        <div style="font-size:17px;font-weight:800;margin-top:4px">${esc(S.t.name)}</div>
+        <div class="muted">본인 이름을 선택하세요</div>
+      </div>
+      ${btns}
+      <button class="btn-g btn-sm" style="width:100%;margin-top:6px;opacity:.7" onclick="pickJudge(null)">명단에 없음 (전체 보기)</button>
+      <div class="muted" style="text-align:center;margin-top:12px;font-size:12px">
+        선택하면 담당 보드만 입력할 수 있습니다.
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderTour(app){
   const t=S.t;
   if(!t){ app.innerHTML='<div class="card"><div class="muted">불러오는 중…</div></div>'; return; }
@@ -838,7 +998,7 @@ function renderTour(app){
 
   const tabs=[
     ...(isChief?[['settings','⚙ 설정'],['players','👥 선수']]:[]),
-    ['rounds','⚔ 라운드·결과'],['penalties','⚠ 경고·반칙 기록'],['standings','🏆 순위표'],
+    ['rounds','⚔ 라운드·결과'],['penalties','⚠ 경고·반칙 기록'],['standings','🏆 순위표'],['progress','📈 라운드별 누적'],
     ...(isChief?[['export','⬇ 내보내기']]:[]),
   ];
   const tabHtml=tabs.map(([k,l])=>`<button class="tab ${S.tab===k?'on':''}" onclick="S.tab='${k}';render()">${l}</button>`).join('');
@@ -849,13 +1009,20 @@ function renderTour(app){
   else if(S.tab==='rounds') body=viewRounds(t, isChief);
   else if(S.tab==='penalties') body=viewPenalties(t, isChief);
   else if(S.tab==='standings') body=viewStandings(t);
+  else if(S.tab==='progress') body=viewProgress(t);
   else if(S.tab==='export') body=viewExport(t);
 
   app.innerHTML=`
     <div style="margin-bottom:14px">
       <div class="row" style="gap:10px">
         <span style="font-size:19px;font-weight:800">${esc(t.name)}</span>
-        <span class="badge ${isChief?'chief':'judge'}">${isChief?'심판장':'심판'}</span>
+        <span class="badge ${isChief?'chief':'judge'}">${isChief?'심판장':(curJudge()?esc(curJudge().name)+' 심판':'심판')}</span>
+        ${(!isChief&&curJudge())?(()=>{
+          const j=curJudge(); const sc=[];
+          if((j.groups||[]).length) sc.push(j.groups.join('·'));
+          if(j.boardFrom||j.boardTo) sc.push(`B${j.boardFrom||1}~${j.boardTo||'끝'}`);
+          return sc.length?`<span class="pen-tag w">담당 ${esc(sc.join(' / '))}</span>`:'';
+        })():''}
       </div>
       <div class="muted">총 ${t.roundsTotal}R · 진행 ${(t.rounds||[]).length}R · 선수 ${(t.players||[]).length}명 · 승점 ${fmt(t.scoring.win)}/${fmt(t.scoring.draw)}/${fmt(t.scoring.loss)} (부전 ${fmt(t.scoring.bye)})</div>
     </div>
@@ -865,6 +1032,32 @@ function renderTour(app){
 
 function viewSettings(t){
   const c=critOf(t);
+  /* 심판 배정 목록 */
+  const allGroups=[...new Set((t.players||[]).map(p=>p.group).filter(Boolean))];
+  const judgeRows=(t.judges||[]).map(j=>{
+    const chips=allGroups.map(g=>{
+      const on=(j.groups||[]).includes(g);
+      return `<button class="pill ${on?'on':''}" style="font-size:12px;padding:4px 10px"
+        onclick="toggleJudgeGroup('${j.id}','${esc(g)}')">${esc(g)}</button>`;
+    }).join('');
+    return `<div class="list-item" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div class="row" style="justify-content:space-between">
+        <b style="font-size:14px">⚖ ${esc(j.name)}</b>
+        <button class="btn-d btn-sm" onclick="removeJudge('${j.id}')">삭제</button>
+      </div>
+      ${allGroups.length?`<div class="row" style="gap:4px;align-items:center">
+        <span class="muted" style="font-size:12px;min-width:60px">담당 부문</span>${chips}</div>`:''}
+      <div class="row" style="gap:6px;align-items:center">
+        <span class="muted" style="font-size:12px;min-width:60px">담당 보드</span>
+        <input type="number" min="0" value="${j.boardFrom||''}" placeholder="시작" style="width:70px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;font-size:13px"
+          onchange="updJudge('${j.id}','boardFrom',this.value)">
+        <span class="muted">~</span>
+        <input type="number" min="0" value="${j.boardTo||''}" placeholder="끝" style="width:70px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;font-size:13px"
+          onchange="updJudge('${j.id}','boardTo',this.value)">
+        <span class="muted" style="font-size:12px">번 보드 (비우면 부문 기준만 적용)</span>
+      </div>
+    </div>`;
+  }).join('');
   const presets=SCORING_PRESETS.map((p,i)=>{
     const on=p.win===t.scoring.win&&p.draw===t.scoring.draw&&p.loss===t.scoring.loss&&p.bye===t.scoring.bye;
     return `<button class="pill ${on?'on':''}" onclick="applyPreset(${i})">${p.label}</button>`;
@@ -897,6 +1090,16 @@ function viewSettings(t){
         <span class="ok" id="basic-ok"></span>
       </div>
       <div class="hint" style="margin-top:8px">심판장 계정(이메일·비밀번호)은 Firebase 콘솔에서 관리되며, 이 화면·데이터 어디에도 저장되지 않습니다. 설정 변경은 서버 규칙상 심판장 계정만 가능합니다.</div>
+    </div>
+
+    <div class="card">
+      <div class="stitle">⚖ 심판 배정 <span class="muted">· 담당 보드만 입력 가능</span></div>
+      <div class="hint">심판을 등록하고 담당을 지정하면, 심판이 입장할 때 본인 이름을 선택하고 <b>자기 담당 보드만 입력</b>할 수 있습니다. 다른 보드는 회색으로 보이며 눌러지지 않아 오입력이 방지됩니다. 부문과 보드 범위는 <b>둘 중 하나만 넣어도 되고 함께 써도 됩니다</b>(하나라도 해당하면 담당). 둘 다 비우면 전체 담당입니다.</div>
+      <div class="row" style="margin-bottom:12px">
+        <input id="j-name" class="grow" placeholder="심판 이름" onkeydown="if(event.key==='Enter')addJudge()">
+        <button class="btn-p" onclick="addJudge()">심판 추가</button>
+      </div>
+      ${judgeRows||'<div class="muted">심판을 추가하지 않으면 모든 심판이 전체 보드를 입력할 수 있습니다.</div>'}
     </div>
     <div class="card gold">
       <div class="stitle">승점 기준 <span class="muted" style="color:var(--gold)">· 대회마다 다르게 설정</span></div>
@@ -1015,16 +1218,17 @@ function viewRounds(t, isChief){
           <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
           <b>${esc(pName(pr.whiteId))}</b> <span style="color:var(--gold);font-weight:700">부전승 (+${fmt(t.scoring.bye)})</span></div></div>`;
       }
-      const btn=(val,label)=>`<button class="rbtn ${res===val?'on':''}"
-        onclick="setResult(${rd.number},${pr.board},${res===val?'null':`'${val}'`})">${label}</button>`;
+      const mine=canEditBoard(pr, rd.number);
+      const btn=(val,label)=>`<button class="rbtn ${res===val?'on':''}" ${mine?'':'disabled'}
+        onclick="${mine?`setResult(${rd.number},${pr.board},${res===val?'null':`'${val}'`})`:''}">${label}</button>`;
       const penBox=(pid,label)=>{
         const p=getPen(rd.number,pid);
         const ctr=(f,ico,txt,color)=>`
           <span class="pen-ctr">
             <span class="pen-lbl" style="color:${color}">${ico} ${txt}</span>
-            <button class="pen-btn" onclick="bumpPen(${rd.number},'${pid}','${f}',-1)" ${p[f]?'':'disabled'}>−</button>
+            <button class="pen-btn" ${mine&&p[f]?'':'disabled'} onclick="${mine?`bumpPen(${rd.number},'${pid}','${f}',-1)`:''}">−</button>
             <b class="pen-num ${p[f]?'hot':''}">${p[f]}</b>
-            <button class="pen-btn" onclick="bumpPen(${rd.number},'${pid}','${f}',1)">＋</button>
+            <button class="pen-btn" ${mine?'':'disabled'} onclick="${mine?`bumpPen(${rd.number},'${pid}','${f}',1)`:''}">＋</button>
           </span>`;
         return `<div class="pen-row">
           <span class="pen-name">${label} ${esc(pName(pid))}</span>
@@ -1032,12 +1236,14 @@ function viewRounds(t, isChief){
           ${ctr('foul','⛔','반칙','var(--red)')}
         </div>`;
       };
-      return `<div class="board ${res?'done':''}">
+      const owner=judgeLabel(pr);
+      return `<div class="board ${res?'done':''} ${mine?'':'notmine'}">
         <div style="font-size:14px">
           <b style="color:var(--green);margin-right:8px">B${pr.board}</b>
           <span class="wtag">백</span> <b>${esc(pName(pr.whiteId))}</b>
           <span style="color:#aaa;margin:0 6px">vs</span>
           <span class="btag">흑</span> <b>${esc(pName(pr.blackId))}</b>
+          ${mine?'':`<span class="pen-tag f" style="margin-left:6px">${owner?esc(owner)+' 담당':'담당 아님'}</span>`}
         </div>
         <div class="row" style="gap:4px">${btn('1-0','백 승')}${btn('1/2','무')}${btn('0-1','흑 승')}</div>
         <div class="pen-wrap">
@@ -1122,6 +1328,88 @@ function viewPenalties(t, isChief){
   </div>`;
 }
 
+function viewProgress(t){
+  const rounds=t.rounds||[];
+  if(!rounds.length) return `<div class="card"><div class="stitle">📈 라운드별 누적</div>
+    <div class="muted">라운드가 진행되면 선수별 누적 점수와 순위 변동이 여기에 표시됩니다.</div></div>`;
+  const prog=roundProgress(t);
+  const {list}=rankPlayers(t);
+  const nums=rounds.map(r=>r.number);
+
+  /* 부문 필터 */
+  const allGroups=[...new Set((t.players||[]).map(p=>p.group).filter(Boolean))];
+  const gf=S.progGroup||'';
+  const gBtns=allGroups.length?`<div class="row" style="gap:4px;margin-bottom:10px">
+    <button class="pill ${gf?'':'on'}" onclick="S.progGroup='';render()">전체</button>
+    ${allGroups.map(g=>`<button class="pill ${gf===g?'on':''}" onclick="S.progGroup='${esc(g)}';render()">${esc(g)}</button>`).join('')}
+  </div>`:'';
+
+  const shown=list.filter(s=>!gf||s.player.group===gf);
+
+  const head=`<tr><th style="text-align:center">순위</th><th>선수</th>
+    ${nums.map(n=>`<th style="text-align:center">${n}R</th>`).join('')}
+    <th style="text-align:center;color:var(--green)">합계</th></tr>`;
+
+  const rows=shown.map((s,i)=>{
+    const rec=prog[s.player.id]||[];
+    const cells=nums.map(n=>{
+      const e=rec.find(x=>x.round===n);
+      if(!e) return '<td style="text-align:center" class="muted">-</td>';
+      const col=e.res==='승'?'var(--green)':(e.res==='패'?'var(--red)':'#888');
+      const arrow=(()=>{
+        const prev=rec.find(x=>x.round===n-1);
+        if(!prev||!prev.rank||!e.rank)return '';
+        if(e.rank<prev.rank)return `<span style="color:var(--green);font-size:10px">▲${prev.rank-e.rank}</span>`;
+        if(e.rank>prev.rank)return `<span style="color:var(--red);font-size:10px">▼${e.rank-prev.rank}</span>`;
+        return '<span style="color:#bbb;font-size:10px">-</span>';
+      })();
+      return `<td style="text-align:center;line-height:1.35">
+        <div style="font-weight:800;color:${col};font-size:14px">${fmt(e.cum)}</div>
+        <div style="font-size:11px;color:#999">${e.res?e.res:'·'} ${e.gained>0?'+'+fmt(e.gained):''}</div>
+        <div>${e.rank?`<span style="font-size:10px;color:#aaa">${e.rank}위</span> ${arrow}`:''}</div>
+      </td>`;
+    }).join('');
+    return `<tr style="opacity:${s.player.active===false?.5:1}">
+      <td style="text-align:center;font-weight:800;color:${i<3?'var(--gold)':'var(--ink)'}">${i+1}</td>
+      <td style="font-weight:700;white-space:nowrap">${esc(s.player.name)}
+        ${s.player.group?`<span class="pen-tag w" style="margin-left:4px">${esc(s.player.group)}</span>`:''}</td>
+      ${cells}
+      <td style="text-align:center;font-weight:800;color:var(--green);font-size:15px">${fmt(s.score)}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="stitle">📈 라운드별 누적 점수 · 순위 변동</div>
+    <div class="hint">각 칸의 <b>큰 숫자</b>는 그 라운드까지의 누적 승점, 아래는 그 라운드 결과와 획득 점수, 맨 아래는 그 시점 순위와 전 라운드 대비 변동입니다.</div>
+    ${gBtns}
+    <div class="overflow"><table style="font-size:13px">${head}${rows||'<tr><td colspan="9" class="muted" style="padding:16px">해당 부문 선수가 없습니다.</td></tr>'}</table></div>
+  </div>
+
+  <div class="card">
+    <div class="stitle">🔍 선수별 상세</div>
+    <div class="hint">선수를 고르면 라운드마다 누구와 어떤 색으로 두어 어떤 결과였는지 확인할 수 있습니다.</div>
+    <select onchange="S.progPid=this.value;render()" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;min-width:200px">
+      <option value="">선수 선택…</option>
+      ${(t.players||[]).map(p=>`<option value="${p.id}" ${S.progPid===p.id?'selected':''}>${esc(p.name)}${p.group?' ('+esc(p.group)+')':''}</option>`).join('')}
+    </select>
+    ${S.progPid&&prog[S.progPid]?(()=>{
+      const p=(t.players||[]).find(x=>x.id===S.progPid);
+      const rec=prog[S.progPid];
+      return `<div class="overflow" style="margin-top:12px"><table style="font-size:13px">
+        <tr><th>라운드</th><th>상대</th><th style="text-align:center">결과</th><th style="text-align:center">획득</th><th style="text-align:center">누적</th><th style="text-align:center">순위</th></tr>
+        ${rec.map(e=>`<tr>
+          <td style="font-weight:700">${e.round}R</td>
+          <td>${esc(e.opp)||'-'}</td>
+          <td style="text-align:center;font-weight:700;color:${e.res==='승'?'var(--green)':(e.res==='패'?'var(--red)':'#888')}">${e.res||'미입력'}</td>
+          <td style="text-align:center">${e.gained>0?'+'+fmt(e.gained):'0'}</td>
+          <td style="text-align:center;font-weight:800;color:var(--green)">${fmt(e.cum)}</td>
+          <td style="text-align:center">${e.rank?e.rank+'위':'-'}</td>
+        </tr>`).join('')}
+      </table></div>`;
+    })():''}
+  </div>`;
+}
+
 function viewStandings(t){
   const {list, tb, criteria}=rankPlayers(t);
   const cols=criteria.filter(k=>k!=='direct'&&k!=='score');
@@ -1152,6 +1440,7 @@ function viewExport(t){
       <button class="btn-p" onclick="exportResults()">⚔ 라운드별 결과 (.xlsx)</button>
       <button class="btn-p" onclick="exportStandings()">🏆 최종 순위표 (.xlsx)</button>
       <button class="btn-p" onclick="exportPenalties()">⚠ 경고·반칙 기록 (.xlsx)</button>
+      <button class="btn-p" onclick="exportProgress()">📈 라운드별 누적 (.xlsx)</button>
     </div>
     <div class="hint" style="margin-top:12px">
       · 선수 명단: No / Name / Rating 열 — 스위스매니저 선수 입력용<br>
