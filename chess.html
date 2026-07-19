@@ -409,14 +409,21 @@ function judgeLabel(pr){
     const ok=(()=>{ const chief=S.isChief; S.isChief=false; const r=canEditBoard(pr); S.isChief=chief; return r; })();
     S.judgeId=saved; return ok;
   });
-  return arr.length===1?arr[0].name:'';
+  return arr.length===1?judgeFullName(arr[0]):'';
 }
 async function addJudge(){
   const n=$('j-name').value.trim(); if(!n)return;
-  const j={id:Math.random().toString(36).slice(2,10), name:n, groups:[], boardFrom:0, boardTo:0};
+  const lb=$('j-label')?$('j-label').value.trim():'';
+  const j={id:Math.random().toString(36).slice(2,10), name:n, label:lb, groups:[], boardFrom:0, boardTo:0};
   await saveT({judges:[...judgeList(), j]});
-  $('j-name').value=''; $('j-name').focus();
+  $('j-name').value=''; if($('j-label'))$('j-label').value='';
+  $('j-name').focus();
 }
+async function updJudgeLabel(jid, val){
+  await saveT({judges:judgeList().map(j=>j.id===jid?{...j, label:String(val).trim()}:j)});
+}
+/* 분류 + 이름 표시용 */
+function judgeFullName(j){ return j?((j.label?j.label+' ':'')+j.name):''; }
 async function removeJudge(jid){ await saveT({judges:judgeList().filter(j=>j.id!==jid)}); }
 async function toggleJudgeGroup(jid, g){
   await saveT({judges:judgeList().map(j=>{
@@ -968,6 +975,7 @@ function renderWhoami(app){
     if((j.groups||[]).length) scope.push(j.groups.join('·'));
     if(j.boardFrom||j.boardTo) scope.push(`B${j.boardFrom||1}~${j.boardTo||'끝'}`);
     return `<button class="btn-g" style="width:100%;margin-bottom:8px;padding:14px;text-align:left" onclick="pickJudge('${j.id}')">
+      ${j.label?`<span class="pen-tag w" style="margin-right:6px">${esc(j.label)}</span>`:''}
       <b style="font-size:15px">${esc(j.name)}</b>
       <span class="muted" style="margin-left:8px;font-size:12px">${scope.length?esc(scope.join(' / ')):'담당 미지정 (전체)'}</span>
     </button>`;
@@ -1016,7 +1024,7 @@ function renderTour(app){
     <div style="margin-bottom:14px">
       <div class="row" style="gap:10px">
         <span style="font-size:19px;font-weight:800">${esc(t.name)}</span>
-        <span class="badge ${isChief?'chief':'judge'}">${isChief?'심판장':(curJudge()?esc(curJudge().name)+' 심판':'심판')}</span>
+        <span class="badge ${isChief?'chief':'judge'}">${isChief?'심판장':(curJudge()?esc(judgeFullName(curJudge()))+' 심판':'심판')}</span>
         ${(!isChief&&curJudge())?(()=>{
           const j=curJudge(); const sc=[];
           if((j.groups||[]).length) sc.push(j.groups.join('·'));
@@ -1041,8 +1049,14 @@ function viewSettings(t){
         onclick="toggleJudgeGroup('${j.id}','${esc(g)}')">${esc(g)}</button>`;
     }).join('');
     return `<div class="list-item" style="flex-direction:column;align-items:stretch;gap:8px">
-      <div class="row" style="justify-content:space-between">
-        <b style="font-size:14px">⚖ ${esc(j.name)}</b>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="row" style="gap:6px;align-items:center">
+          <span style="font-size:15px">⚖</span>
+          <input value="${esc(j.label||'')}" placeholder="분류(예: 초등부)" title="심판 이름 앞에 표시됩니다"
+            style="width:110px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-weight:700;color:var(--gold)"
+            onchange="updJudgeLabel('${j.id}',this.value)">
+          <b style="font-size:14px">${esc(j.name)}</b>
+        </div>
         <button class="btn-d btn-sm" onclick="removeJudge('${j.id}')">삭제</button>
       </div>
       ${allGroups.length?`<div class="row" style="gap:4px;align-items:center">
@@ -1094,8 +1108,9 @@ function viewSettings(t){
 
     <div class="card">
       <div class="stitle">⚖ 심판 배정 <span class="muted">· 담당 보드만 입력 가능</span></div>
-      <div class="hint">심판을 등록하고 담당을 지정하면, 심판이 입장할 때 본인 이름을 선택하고 <b>자기 담당 보드만 입력</b>할 수 있습니다. 다른 보드는 회색으로 보이며 눌러지지 않아 오입력이 방지됩니다. 부문과 보드 범위는 <b>둘 중 하나만 넣어도 되고 함께 써도 됩니다</b>(하나라도 해당하면 담당). 둘 다 비우면 전체 담당입니다.</div>
+      <div class="hint">심판을 등록하고 담당을 지정하면, 심판이 입장할 때 본인 이름을 선택하고 <b>자기 담당 보드만 입력</b>할 수 있습니다. 다른 보드는 회색으로 보이며 눌러지지 않아 오입력이 방지됩니다. <b>분류</b>(초등부·3학년 등)는 이름 앞에 표시되어 심판이 여럿일 때 구분이 쉽습니다. 부문과 보드 범위는 <b>둘 중 하나만 넣어도 되고 함께 써도 됩니다</b>(하나라도 해당하면 담당). 둘 다 비우면 전체 담당입니다.</div>
       <div class="row" style="margin-bottom:12px">
+        <input id="j-label" style="width:130px" placeholder="분류(예: 초등부)" onkeydown="if(event.key==='Enter')addJudge()">
         <input id="j-name" class="grow" placeholder="심판 이름" onkeydown="if(event.key==='Enter')addJudge()">
         <button class="btn-p" onclick="addJudge()">심판 추가</button>
       </div>
